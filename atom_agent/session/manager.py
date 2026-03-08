@@ -1,6 +1,9 @@
 """Session management for conversation history."""
 
+from __future__ import annotations
+
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +47,7 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated
     proactive_context: dict[str, Any] = field(default_factory=dict)  # For proactive task context
+    workspace_name: str | None = None  # Associated workspace name
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -91,16 +95,53 @@ class Session:
         """Get a value from the proactive context."""
         return self.proactive_context.get(key, default)
 
+    def to_export_dict(self) -> dict[str, Any]:
+        """Export session to a dictionary for transfer between workspaces."""
+        return {
+            "key": self.key,
+            "messages": self.messages,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "metadata": self.metadata,
+            "last_consolidated": self.last_consolidated,
+            "proactive_context": self.proactive_context,
+            "workspace_name": self.workspace_name,
+            "export_version": 1,
+        }
+
+    @classmethod
+    def from_export_dict(cls, data: dict[str, Any]) -> "Session":
+        """Create a session from an export dictionary."""
+        return cls(
+            key=data["key"],
+            messages=data.get("messages", []),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
+            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(),
+            metadata=data.get("metadata", {}),
+            last_consolidated=data.get("last_consolidated", 0),
+            proactive_context=data.get("proactive_context", {}),
+            workspace_name=data.get("workspace_name"),
+        )
+
 
 class SessionManager:
     """
-    Manages conversation sessions.
+    Manages conversation sessions for a specific workspace.
 
-    Sessions are stored as JSONL files in the sessions directory.
+    Sessions are stored as JSONL files in the workspace's sessions directory.
+    Supports session import/export between workspaces.
     """
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, workspace_name: str | None = None):
+        """
+        Initialize session manager.
+
+        Args:
+            workspace: Path to the workspace directory
+            workspace_name: Optional name for the workspace (for metadata)
+        """
         self.workspace = workspace
+        self.workspace_name = workspace_name or workspace.name
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self._cache: dict[str, Session] = {}
 
@@ -125,7 +166,7 @@ class SessionManager:
 
         session = self._load(key)
         if session is None:
-            session = Session(key=key)
+            session = Session(key=key, workspace_name=self.workspace_name)
             logger.debug("Session created", extra={"session_key": key})
         else:
             logger.debug(
@@ -148,6 +189,7 @@ class SessionManager:
             created_at = None
             last_consolidated = 0
             proactive_context = {}
+            workspace_name = None
 
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -166,6 +208,7 @@ class SessionManager:
                         )
                         last_consolidated = data.get("last_consolidated", 0)
                         proactive_context = data.get("proactive_context", {})
+                        workspace_name = data.get("workspace_name")
                     else:
                         messages.append(data)
 
@@ -176,6 +219,7 @@ class SessionManager:
                 metadata=metadata,
                 last_consolidated=last_consolidated,
                 proactive_context=proactive_context,
+                workspace_name=workspace_name,
             )
         except Exception as e:
             logger.warning("Failed to load session", extra={"session_key": key, "error": str(e)})
@@ -195,6 +239,7 @@ class SessionManager:
                     "metadata": session.metadata,
                     "last_consolidated": session.last_consolidated,
                     "proactive_context": session.proactive_context,
+                    "workspace_name": session.workspace_name or self.workspace_name,
                 }
                 f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
                 for msg in session.messages:
@@ -215,6 +260,30 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def delete(self, key: str) -> bool:
+        """
+        Delete a session from disk and cache.
+
+        Args:
+            key: Session key to delete
+
+        Returns:
+            True if session was deleted, False if not found
+        """
+        path = self._get_session_path(key)
+        self._cache.pop(key, None)
+
+        if path.exists():
+            try:
+                path.unlink()
+                logger.info("Session deleted", extra={"session_key": key})
+                return True
+            except Exception as e:
+                logger.error("Failed to delete session", extra={"session_key": key, "error": str(e)})
+                return False
+
+        return False
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """
@@ -240,9 +309,124 @@ class SessionManager:
                                     "created_at": data.get("created_at"),
                                     "updated_at": data.get("updated_at"),
                                     "path": str(path),
+                                    "workspace_name": data.get("workspace_name"),
                                 }
                             )
             except Exception:
                 continue
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def export_session(self, key: str, export_path: Path | None = None) -> Path | None:
+        """
+        Export a session to a JSON file for transfer to another workspace.
+
+        Args:
+            key: Session key to export
+            export_path: Optional path for export file (default: {key}.json)
+
+        Returns:
+            Path to exported file, or None if session not found
+        """
+        session = self._load(key)
+        if session is None:
+            logger.warning("Session not found for export", extra={"session_key": key})
+            return None
+
+        if export_path is None:
+            export_path = self.workspace / f"{safe_filename(key.replace(':', '_'))}.export.json"
+
+        try:
+            with open(export_path, "w", encoding="utf-8") as f:
+                json.dump(session.to_export_dict(), f, indent=2, ensure_ascii=False)
+
+            logger.info("Session exported", extra={"session_key": key, "path": str(export_path)})
+            return export_path
+        except Exception as e:
+            logger.error("Failed to export session", extra={"session_key": key, "error": str(e)})
+            return None
+
+    def import_session(self, export_path: Path, new_key: str | None = None) -> Session | None:
+        """
+        Import a session from an export file.
+
+        Args:
+            export_path: Path to the export file
+            new_key: Optional new key for the session (default: use original key)
+
+        Returns:
+            Imported session, or None on failure
+        """
+        try:
+            with open(export_path, encoding="utf-8") as f:
+                data = json.load(f)
+
+            session = Session.from_export_dict(data)
+            if new_key:
+                session.key = new_key
+
+            # Update workspace association
+            session.workspace_name = self.workspace_name
+
+            # Save to this workspace
+            self.save(session)
+
+            logger.info(
+                "Session imported",
+                extra={"session_key": session.key, "source_path": str(export_path)},
+            )
+            return session
+        except Exception as e:
+            logger.error("Failed to import session", extra={"path": str(export_path), "error": str(e)})
+            return None
+
+    def copy_session_to_workspace(
+        self, key: str, target_workspace: Path, target_manager: "SessionManager | None" = None
+    ) -> Session | None:
+        """
+        Copy a session to another workspace.
+
+        Args:
+            key: Session key to copy
+            target_workspace: Target workspace path
+            target_manager: Optional SessionManager for target (created if None)
+
+        Returns:
+            Copied session in target workspace, or None on failure
+        """
+        session = self._load(key)
+        if session is None:
+            logger.warning("Session not found for copy", extra={"session_key": key})
+            return None
+
+        if target_manager is None:
+            target_manager = SessionManager(target_workspace)
+
+        # Create a copy with updated workspace association
+        copied_session = Session(
+            key=session.key,
+            messages=list(session.messages),
+            created_at=session.created_at,
+            updated_at=datetime.now(),
+            metadata=dict(session.metadata),
+            last_consolidated=session.last_consolidated,
+            proactive_context=dict(session.proactive_context),
+            workspace_name=target_manager.workspace_name,
+        )
+
+        # Add source info to metadata
+        copied_session.metadata["copied_from"] = self.workspace_name
+        copied_session.metadata["copied_at"] = datetime.now().isoformat()
+
+        target_manager.save(copied_session)
+
+        logger.info(
+            "Session copied to workspace",
+            extra={
+                "session_key": key,
+                "source_workspace": str(self.workspace),
+                "target_workspace": str(target_workspace),
+            },
+        )
+
+        return copied_session
