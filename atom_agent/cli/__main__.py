@@ -4,6 +4,9 @@ CLI entry point for AtomAgent.
 Usage:
     python -m atom_agent [options]
     python -m atom_agent.cli [options]
+    atom-agent init [path]           Initialize a new workspace
+    atom-agent identity show         Display current identity
+    atom-agent workspace validate    Check workspace health
 
 Configuration:
     Settings are loaded from .env file in the current directory (or parent dirs).
@@ -37,6 +40,9 @@ def parse_args() -> argparse.Namespace:
         description="Interactive CLI chat with AtomAgent",
     )
 
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Main chat command (default when no subcommand)
     parser.add_argument(
         "--provider",
         "-p",
@@ -81,6 +87,58 @@ def parse_args() -> argparse.Namespace:
         help="Use JSON log format (for machine parsing)",
     )
 
+    # init subcommand
+    init_parser = subparsers.add_parser("init", help="Initialize a new workspace")
+    init_parser.add_argument(
+        "path",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Workspace path (default: ./workspace)",
+    )
+    init_parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Overwrite existing files",
+    )
+    init_parser.add_argument(
+        "--name",
+        "-n",
+        default="default",
+        help="Name for the workspace",
+    )
+
+    # identity subcommand
+    identity_parser = subparsers.add_parser("identity", help="Manage agent identity")
+    identity_parser.add_argument(
+        "action",
+        choices=["show"],
+        help="Action to perform",
+    )
+    identity_parser.add_argument(
+        "--workspace",
+        "-w",
+        type=Path,
+        default=None,
+        help="Workspace directory",
+    )
+
+    # workspace subcommand
+    workspace_parser = subparsers.add_parser("workspace", help="Manage workspaces")
+    workspace_parser.add_argument(
+        "action",
+        choices=["validate", "list", "info"],
+        help="Action to perform",
+    )
+    workspace_parser.add_argument(
+        "path",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Workspace path (for validate/info)",
+    )
+
     return parser.parse_args()
 
 
@@ -98,10 +156,130 @@ def get_provider(name: str, config: Config):
     raise ValueError(f"Unknown provider: {name}")
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    """Initialize a new workspace."""
+    from atom_agent.workspace import WorkspaceManager
+
+    path = args.path or Path("./workspace")
+    manager = WorkspaceManager(path)
+
+    try:
+        config = manager.init_workspace(path, force=args.force, name=args.name)
+        print(f"✓ Workspace initialized at: {config.path}")
+        print("\nCreated files:")
+        print(f"  - {config.path}/IDENTITY.md  (agent identity)")
+        print(f"  - {config.path}/SOUL.md      (values and ethics)")
+        print(f"  - {config.path}/AGENTS.md    (technical guidelines)")
+        print(f"  - {config.path}/USER.md      (user preferences)")
+        print(f"  - {config.path}/TOOLS.md     (tool usage guidelines)")
+        print(f"  - {config.path}/memory/      (MEMORY.md, HISTORY.md)")
+        print(f"  - {config.path}/sessions/    (conversation history)")
+        return 0
+    except Exception as e:
+        print(f"Error: Failed to initialize workspace: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_identity(args: argparse.Namespace) -> int:
+    """Manage agent identity."""
+    from atom_agent.workspace import WorkspaceManager
+
+    if args.action == "show":
+        workspace = args.workspace or Path("./workspace")
+        manager = WorkspaceManager(workspace)
+
+        if errors := manager.validate_workspace():
+            print(f"Error: Invalid workspace: {errors[0]}", file=sys.stderr)
+            return 1
+
+        identity = manager.get_identity()
+        print(f"=== Identity from {workspace}/IDENTITY.md ===\n")
+        print(identity)
+        return 0
+
+    return 1
+
+
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """Manage workspaces."""
+    from atom_agent.workspace import WorkspaceManager
+
+    if args.action == "validate":
+        path = args.path or Path("./workspace")
+        manager = WorkspaceManager(path)
+
+        errors = manager.validate_workspace()
+        if errors:
+            print(f"✗ Workspace validation failed for {path}:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
+        else:
+            print(f"✓ Workspace is valid: {path}")
+            return 0
+
+    elif args.action == "info":
+        path = args.path or Path("./workspace")
+        manager = WorkspaceManager(path)
+
+        errors = manager.validate_workspace()
+        print(f"Workspace: {path}")
+        print(f"Status: {'Valid' if not errors else 'Invalid'}")
+
+        if errors:
+            print("Errors:")
+            for error in errors:
+                print(f"  - {error}")
+
+        # Show bootstrap files status
+        print("\nBootstrap files:")
+        for filename in ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md"]:
+            file_path = path / filename
+            status = "✓" if file_path.exists() else "✗"
+            print(f"  {status} {filename}")
+
+        # Show sessions
+        sessions = manager.list_sessions()
+        print(f"\nSessions: {len(sessions)}")
+        for session in sessions[:5]:  # Show max 5
+            print(f"  - {session['key']}")
+
+        return 0 if not errors else 1
+
+    elif args.action == "list":
+        # List sessions in the workspace
+        path = args.path or Path("./workspace")
+        manager = WorkspaceManager(path)
+
+        sessions = manager.list_sessions()
+        if not sessions:
+            print("No sessions found.")
+            return 0
+
+        print(f"Sessions in {path}:")
+        for session in sessions:
+            print(f"  - {session['key']}")
+            print(f"    Created: {session.get('created_at', 'unknown')}")
+            print(f"    Updated: {session.get('updated_at', 'unknown')}")
+
+        return 0
+
+    return 1
+
+
 def main() -> int:
     """Main entry point."""
     args = parse_args()
 
+    # Handle subcommands
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "identity":
+        return cmd_identity(args)
+    elif args.command == "workspace":
+        return cmd_workspace(args)
+
+    # Default: run interactive chat
     # Load configuration from .env and environment
     config = Config.load(env_file=args.env_file)
 
