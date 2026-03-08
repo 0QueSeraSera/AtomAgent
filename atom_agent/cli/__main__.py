@@ -21,19 +21,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import sys
 from pathlib import Path
 
 from atom_agent.config import Config
+from atom_agent.logging import LoggingConfig, get_logger, setup_logging
 
-# Setup basic logging before imports
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-
-logger = logging.getLogger(__name__)
+logger = get_logger("cli.main")
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +74,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default=None,
+        help="Log level override",
+    )
+    parser.add_argument(
+        "--log-format",
+        choices=["text", "json"],
+        default=None,
+        help="Log format override",
+    )
+    parser.add_argument(
+        "--log-output",
+        choices=["stderr", "stdout", "file"],
+        default=None,
+        help="Log output destination override",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="Log file path (implies --log-output file)",
+    )
 
     return parser.parse_args()
 
@@ -113,9 +131,26 @@ def main() -> int:
     if args.model:
         config.model = args.model
 
-    # Configure logging level
+    # Configure AtomAgent structured logging
+    log_config = LoggingConfig()
+    if args.log_level:
+        log_config.level = args.log_level
+    elif config.debug:
+        log_config.level = "DEBUG"
+
+    if args.log_format:
+        log_config.format = args.log_format
+
+    if args.log_output:
+        log_config.output = args.log_output
+
+    if args.log_file:
+        log_config.output = "file"
+        log_config.file_path = args.log_file
+
+    setup_logging(log_config)
+
     if config.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
         logger.debug(f"Config: {config.to_dict()}")
 
     # Validate provider configuration

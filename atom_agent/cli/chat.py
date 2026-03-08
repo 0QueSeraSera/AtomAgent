@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
 import signal
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from atom_agent import AgentLoop, MessageBus
 from atom_agent.bus.events import InboundMessage, OutboundMessage
+from atom_agent.logging import get_logger
 
 if TYPE_CHECKING:
     from atom_agent.provider.base import LLMProvider
 
-logger = logging.getLogger(__name__)
+logger = get_logger("cli.chat")
 
 
 class AsyncCLIChat:
