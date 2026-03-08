@@ -2,6 +2,7 @@
 
 from atom_agent.agent import AgentLoop, ContextBuilder
 from atom_agent.bus import MessageBus, InboundMessage, OutboundMessage
+from atom_agent.config import Config, get_config
 from atom_agent.provider import LLMProvider, LLMResponse, ToolCallRequest
 from atom_agent.tools import Tool, ToolRegistry
 from atom_agent.session import Session, SessionManager
@@ -13,6 +14,8 @@ __all__ = [
     "MessageBus",
     "InboundMessage",
     "OutboundMessage",
+    "Config",
+    "get_config",
     "LLMProvider",
     "LLMResponse",
     "ToolCallRequest",
