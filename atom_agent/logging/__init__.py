@@ -39,6 +39,7 @@ from atom_agent.logging.context import (
     trace_context,
 )
 from atom_agent.logging.formatter import JSONFormatter, StructuredFormatter
+from atom_agent.logging.handlers import MultiChannelHandler, generate_session_timestamp
 from atom_agent.logging.redaction import redact_api_key, truncate_content
 
 if TYPE_CHECKING:
@@ -63,6 +64,9 @@ __all__ = [
     # Formatters
     "StructuredFormatter",
     "JSONFormatter",
+    # Handlers
+    "MultiChannelHandler",
+    "generate_session_timestamp",
     # Redaction utilities
     "truncate_content",
     "redact_api_key",
@@ -232,26 +236,39 @@ def setup_logging(config: LoggingConfig | None = None) -> None:
     if _CONFIGURED:
         root_logger.handlers.clear()
 
-    # Create handler based on output type
-    if config.output == "file" and config.file_path:
-        # Ensure directory exists
-        config.file_path.parent.mkdir(parents=True, exist_ok=True)
-        handler: logging.Handler = logging.FileHandler(config.file_path)
-    elif config.output == "stdout":
-        handler = logging.StreamHandler(sys.stdout)
-    else:
-        handler = logging.StreamHandler(sys.stderr)
-
-    # Set handler level
-    handler.setLevel(level)
-
     # Create formatter based on format type
     if config.format == "json":
         formatter: logging.Formatter = JSONFormatter(max_content_length=config.max_content_length)
     else:
         formatter = StructuredFormatter(max_content_length=config.max_content_length)
 
-    handler.setFormatter(formatter)
+    # Create handler based on configuration
+    if config.separate_channels:
+        # Use MultiChannelHandler for channel-based separation
+        log_dir = config.log_dir or Path("./logs")
+        session_timestamp = generate_session_timestamp()
+
+        handler: logging.Handler = MultiChannelHandler(
+            base_path=log_dir,
+            session_timestamp=session_timestamp,
+            channels=config.channels_to_log,
+            formatter=formatter,
+        )
+    elif config.output == "file" and config.file_path:
+        # Ensure directory exists
+        config.file_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(config.file_path)
+        handler.setFormatter(formatter)
+    elif config.output == "stdout":
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(formatter)
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(formatter)
+
+    # Set handler level
+    handler.setLevel(level)
+
     root_logger.addHandler(handler)
 
     # Set component-specific levels

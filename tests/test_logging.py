@@ -12,7 +12,9 @@ import pytest
 from atom_agent.logging import (
     JSONFormatter,
     LoggingConfig,
+    MultiChannelHandler,
     StructuredFormatter,
+    generate_session_timestamp,
     generate_trace_id,
     get_logger,
     get_session_key,
@@ -466,3 +468,240 @@ class TestAtomAgentLogger:
 
         captured = capsys.readouterr()
         assert "Tool call" in captured.err
+
+
+class TestGenerateSessionTimestamp:
+    """Tests for generate_session_timestamp function."""
+
+    def test_format(self) -> None:
+        """Should generate timestamp in YYYYMMDD_HHMMSS format."""
+        timestamp = generate_session_timestamp()
+        assert len(timestamp) == 15
+        assert timestamp[8] == "_"
+        # Check all characters are digits or underscore
+        assert all(c.isdigit() or c == "_" for c in timestamp)
+
+    def test_unique_per_call(self) -> None:
+        """Should generate different timestamps (unless called very quickly)."""
+        import time
+
+        ts1 = generate_session_timestamp()
+        time.sleep(1)  # Ensure different second
+        ts2 = generate_session_timestamp()
+        # At minimum, the seconds should be different
+        assert ts1 != ts2
+
+
+class TestMultiChannelHandler:
+    """Tests for MultiChannelHandler."""
+
+    def test_creates_main_log_file(self, tmp_path: Path) -> None:
+        """Should create main combined log file."""
+        handler = MultiChannelHandler(
+            base_path=tmp_path,
+            session_timestamp="20260308_142345",
+            channels=["cli", "proactive"],
+        )
+
+        # Check main log file exists
+        main_log = tmp_path / "atom_agent_20260308_142345.log"
+        assert main_log.exists()
+
+        handler.close()
+
+    def test_routes_to_channel_files(self, tmp_path: Path) -> None:
+        """Should route logs to appropriate channel files."""
+        formatter = StructuredFormatter()
+        handler = MultiChannelHandler(
+            base_path=tmp_path,
+            session_timestamp="20260308_142345",
+            channels=["cli", "proactive"],
+            formatter=formatter,
+        )
+
+        # Create a log record with channel=cli
+        record = logging.LogRecord(
+            name="test.module",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="CLI message",
+            args=(),
+            exc_info=None,
+        )
+        record.channel = "cli"  # type: ignore
+        handler.emit(record)
+
+        # Create a log record with channel=proactive
+        record2 = logging.LogRecord(
+            name="test.module",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="Proactive message",
+            args=(),
+            exc_info=None,
+        )
+        record2.channel = "proactive"  # type: ignore
+        handler.emit(record2)
+
+        handler.flush()
+        handler.close()
+
+        # Check main log has both messages
+        main_log = tmp_path / "atom_agent_20260308_142345.log"
+        main_content = main_log.read_text()
+        assert "CLI message" in main_content
+        assert "Proactive message" in main_content
+
+        # Check cli log has only cli message
+        cli_log = tmp_path / "atom_agent_20260308_142345_cli.log"
+        cli_content = cli_log.read_text()
+        assert "CLI message" in cli_content
+        assert "Proactive message" not in cli_content
+
+        # Check proactive log has only proactive message
+        proactive_log = tmp_path / "atom_agent_20260308_142345_proactive.log"
+        proactive_content = proactive_log.read_text()
+        assert "Proactive message" in proactive_content
+        assert "CLI message" not in proactive_content
+
+    def test_no_channel_ignored(self, tmp_path: Path) -> None:
+        """Records without channel should only go to main log."""
+        handler = MultiChannelHandler(
+            base_path=tmp_path,
+            session_timestamp="20260308_142345",
+            channels=["cli", "proactive"],
+        )
+
+        record = logging.LogRecord(
+            name="test.module",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="No channel message",
+            args=(),
+            exc_info=None,
+        )
+        # No channel attribute
+        handler.emit(record)
+        handler.close()
+
+        # Main log should have message
+        main_log = tmp_path / "atom_agent_20260308_142345.log"
+        assert "No channel message" in main_log.read_text()
+
+        # No channel-specific files should be created
+        assert not (tmp_path / "atom_agent_20260308_142345_cli.log").exists()
+
+    def test_filters_by_configured_channels(self, tmp_path: Path) -> None:
+        """Should only create files for configured channels."""
+        handler = MultiChannelHandler(
+            base_path=tmp_path,
+            session_timestamp="20260308_142345",
+            channels=["cli"],  # Only cli configured
+        )
+
+        record = logging.LogRecord(
+            name="test.module",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="System message",
+            args=(),
+            exc_info=None,
+        )
+        record.channel = "system"  # type: ignore
+        handler.emit(record)
+        handler.close()
+
+        # Main log should have message
+        main_log = tmp_path / "atom_agent_20260308_142345.log"
+        assert "System message" in main_log.read_text()
+
+        # System log should NOT exist (not in configured channels)
+        assert not (tmp_path / "atom_agent_20260308_142345_system.log").exists()
+
+    def test_all_channels_when_none_specified(self, tmp_path: Path) -> None:
+        """When channels is None, should log all encountered channels."""
+        handler = MultiChannelHandler(
+            base_path=tmp_path,
+            session_timestamp="20260308_142345",
+            channels=None,  # Log all channels
+        )
+
+        # Log to an arbitrary channel
+        record = logging.LogRecord(
+            name="test.module",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg="Custom message",
+            args=(),
+            exc_info=None,
+        )
+        record.channel = "custom_channel"  # type: ignore
+        handler.emit(record)
+        handler.close()
+
+        # Custom channel file should be created
+        custom_log = tmp_path / "atom_agent_20260308_142345_custom_channel.log"
+        assert "Custom message" in custom_log.read_text()
+
+
+class TestSeparateChannelsConfig:
+    """Tests for separate_channels configuration."""
+
+    def test_separate_channels_creates_files(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """separate_channels=True should create multiple log files."""
+        import atom_agent.logging
+        atom_agent.logging._CONFIGURED = False
+
+        config = LoggingConfig(
+            level="DEBUG",
+            separate_channels=True,
+            channels_to_log=["cli", "system"],
+            log_dir=tmp_path,
+        )
+        setup_logging(config)
+
+        logger = get_logger("test")
+        logger.info("CLI message", extra={"channel": "cli"})
+        logger.info("System message", extra={"channel": "system"})
+
+        # Close handlers to flush
+        for handler in logging.getLogger("atom_agent").handlers:
+            handler.close()
+
+        # Check files exist
+        files = list(tmp_path.glob("atom_agent_*.log"))
+        # Should have main + 2 channel files
+        assert len(files) >= 3
+
+        # Find main log (no channel suffix after timestamp)
+        # Main log: atom_agent_TIMESTAMP.log (no trailing _channel)
+        main_logs = [f for f in files if not any(
+            f.name.endswith(f"_{ch}.log") for ch in ["cli", "system"]
+        )]
+        assert len(main_logs) >= 1
+        main_content = main_logs[0].read_text()
+        assert "CLI message" in main_content
+        assert "System message" in main_content
+
+    def test_env_var_override_separate_channels(self, monkeypatch: Any) -> None:
+        """ATOM_AGENT_LOG_SEPARATE_CHANNELS should enable channel separation."""
+        monkeypatch.setenv("ATOM_AGENT_LOG_SEPARATE_CHANNELS", "true")
+        config = LoggingConfig()
+        assert config.separate_channels is True
+
+    def test_env_var_override_channels(self, monkeypatch: Any) -> None:
+        """ATOM_AGENT_LOG_CHANNELS should set channels list."""
+        monkeypatch.setenv("ATOM_AGENT_LOG_CHANNELS", "cli,proactive,system")
+        config = LoggingConfig()
+        assert config.channels_to_log == ["cli", "proactive", "system"]
+
+    def test_env_var_override_log_dir(self, monkeypatch: Any) -> None:
+        """ATOM_AGENT_LOG_DIR should set log directory."""
+        monkeypatch.setenv("ATOM_AGENT_LOG_DIR", "/custom/logs")
+        config = LoggingConfig()
+        assert config.log_dir == Path("/custom/logs")

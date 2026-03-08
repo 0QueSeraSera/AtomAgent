@@ -24,6 +24,10 @@ class LoggingConfig:
     component_levels: dict[str, str] = field(default_factory=dict)
     # Verbose content logging - includes full prompts, responses, and tool results
     log_content: bool = False
+    # Multi-channel file separation
+    separate_channels: bool = False
+    channels_to_log: list[str] | None = None  # None = log all channels
+    log_dir: Path | None = None  # Base directory for log files (default: ./logs)
 
     def __post_init__(self) -> None:
         """Apply environment variable overrides."""
@@ -45,6 +49,16 @@ class LoggingConfig:
         # Verbose content logging
         if log_content := os.environ.get("ATOM_AGENT_LOG_CONTENT"):
             self.log_content = log_content.lower() in ("1", "true", "yes")
+
+        # Multi-channel file separation
+        if separate_channels := os.environ.get("ATOM_AGENT_LOG_SEPARATE_CHANNELS"):
+            self.separate_channels = separate_channels.lower() in ("1", "true", "yes")
+
+        if channels := os.environ.get("ATOM_AGENT_LOG_CHANNELS"):
+            self.channels_to_log = [c.strip() for c in channels.split(",") if c.strip()]
+
+        if log_dir := os.environ.get("ATOM_AGENT_LOG_DIR"):
+            self.log_dir = Path(log_dir)
 
         # Validate level
         valid_levels = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "TRACE")

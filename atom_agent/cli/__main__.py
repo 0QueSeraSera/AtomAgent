@@ -103,6 +103,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose content logging (includes full prompts, responses, tool results)",
     )
+    parser.add_argument(
+        "--log-separate-channels",
+        action="store_true",
+        help="Enable separate log files per channel (cli, proactive, system, etc.)",
+    )
+    parser.add_argument(
+        "--log-channels",
+        type=str,
+        default=None,
+        help="Comma-separated list of channels to log (e.g., cli,proactive,system)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="Directory for log files (default: ./logs)",
+    )
 
     return parser.parse_args()
 
@@ -157,6 +174,15 @@ def main() -> int:
         log_config.log_content = True
         # Increase max content length for verbose logging
         log_config.max_content_length = 10000
+
+    if args.log_separate_channels:
+        log_config.separate_channels = True
+
+    if args.log_channels:
+        log_config.channels_to_log = [c.strip() for c in args.log_channels.split(",") if c.strip()]
+
+    if args.log_dir:
+        log_config.log_dir = args.log_dir
 
     setup_logging(log_config)
 
