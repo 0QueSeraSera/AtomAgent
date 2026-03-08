@@ -42,6 +42,7 @@ class AgentLoop:
     - Background memory consolidation
     - Proactive task scheduling
     - Task cancellation support
+    - Workspace-aware session management
     """
 
     _TOOL_RESULT_MAX_CHARS = 500
@@ -59,10 +60,29 @@ class AgentLoop:
         reasoning_effort: str | None = None,
         agent_name: str = "AtomAgent",
         session_manager: SessionManager | None = None,
+        workspace_name: str | None = None,
     ):
+        """
+        Initialize the agent loop.
+
+        Args:
+            bus: Message bus for communication
+            provider: LLM provider instance
+            workspace: Path to the workspace directory
+            model: Model to use (default: provider default)
+            max_iterations: Maximum tool call iterations per message
+            temperature: Temperature for LLM calls
+            max_tokens: Maximum tokens for LLM responses
+            memory_window: Number of messages before consolidation
+            reasoning_effort: Reasoning effort setting
+            agent_name: Name of the agent
+            session_manager: Optional session manager (created if None)
+            workspace_name: Optional workspace name (derived from path if None)
+        """
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
+        self.workspace_name = workspace_name or workspace.name
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         self.temperature = temperature
@@ -72,7 +92,7 @@ class AgentLoop:
         self.agent_name = agent_name
 
         self.context = ContextBuilder(workspace, agent_name)
-        self.sessions = session_manager or SessionManager(workspace)
+        self.sessions = session_manager or SessionManager(workspace, self.workspace_name)
         self.tools = ToolRegistry()
         self.scheduler = ProactiveScheduler(bus)
 
@@ -84,6 +104,7 @@ class AgentLoop:
         )
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._processing_lock = asyncio.Lock()
+        self._workspace_lock = asyncio.Lock()  # Lock for workspace switching
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -105,6 +126,81 @@ class AgentLoop:
     def unregister_proactive_task(self, task_id: str) -> None:
         """Unregister a proactive task."""
         self.scheduler.unregister_task(task_id)
+
+    async def switch_workspace(
+        self, new_workspace: Path, workspace_name: str | None = None
+    ) -> bool:
+        """
+        Switch to a different workspace at runtime.
+
+        This will:
+        - Save any pending sessions
+        - Load the new workspace configuration
+        - Rebuild context with new identity
+
+        Args:
+            new_workspace: Path to the new workspace
+            workspace_name: Optional name for the workspace
+
+        Returns:
+            True if switch was successful
+        """
+        async with self._workspace_lock:
+            try:
+                logger.info(
+                    "Switching workspace",
+                    extra={
+                        "from": str(self.workspace),
+                        "to": str(new_workspace),
+                    },
+                )
+
+                # Validate new workspace
+                if not new_workspace.exists():
+                    logger.warning("Target workspace does not exist", extra={"path": str(new_workspace)})
+                    return False
+
+                # Update workspace
+                self.workspace = new_workspace
+                self.workspace_name = workspace_name or new_workspace.name
+
+                # Rebuild context
+                self.context = ContextBuilder(new_workspace, self.agent_name)
+
+                # Create new session manager for the workspace
+                self.sessions = SessionManager(new_workspace, self.workspace_name)
+
+                logger.info(
+                    "Workspace switched",
+                    extra={
+                        "workspace": str(self.workspace),
+                        "workspace_name": self.workspace_name,
+                    },
+                )
+
+                return True
+            except Exception as e:
+                logger.error(
+                    "Failed to switch workspace",
+                    extra={"error": str(e), "path": str(new_workspace)},
+                )
+                return False
+
+    def get_workspace_info(self) -> dict[str, Any]:
+        """
+        Get information about the current workspace.
+
+        Returns:
+            Dict with workspace information
+        """
+        return {
+            "path": str(self.workspace),
+            "name": self.workspace_name,
+            "agent_name": self.agent_name,
+            "model": self.model,
+            "sessions": len(self.sessions.list_sessions()),
+            "tools": self.tools.tool_names,
+        }
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
@@ -158,7 +254,7 @@ class AgentLoop:
                 tools=len(self.tools),
                 messages=messages,
                 prompt_chars=prompt_chars,
-                extra={"iteration": iteration},
+                extra={"iteration": iteration, "workspace": self.workspace_name},
             )
             start_time = time.perf_counter()
 
@@ -260,6 +356,7 @@ class AgentLoop:
                 "model": self.model,
                 "max_iterations": self.max_iterations,
                 "tools": self.tools.tool_names,
+                "workspace": self.workspace_name,
             },
         )
         self._running = True
@@ -455,7 +552,14 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=f"🤖 {self.agent_name} commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands",
+                content=f"🤖 {self.agent_name} commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands\n/workspace — Show workspace info",
+            )
+        if cmd == "/workspace":
+            info = self.get_workspace_info()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"📁 Workspace: {info['name']}\nPath: {info['path']}\nModel: {info['model']}\nSessions: {info['sessions']}",
             )
 
         # Background memory consolidation
