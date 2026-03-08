@@ -22,6 +22,8 @@ class LoggingConfig:
     file_path: Path | None = None
     max_content_length: int = 200
     component_levels: dict[str, str] = field(default_factory=dict)
+    # Verbose content logging - includes full prompts, responses, and tool results
+    log_content: bool = False
 
     def __post_init__(self) -> None:
         """Apply environment variable overrides."""
@@ -39,6 +41,10 @@ class LoggingConfig:
 
         if file_path := os.environ.get("ATOM_AGENT_LOG_FILE"):
             self.file_path = Path(file_path)
+
+        # Verbose content logging
+        if log_content := os.environ.get("ATOM_AGENT_LOG_CONTENT"):
+            self.log_content = log_content.lower() in ("1", "true", "yes")
 
         # Validate level
         valid_levels = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "TRACE")

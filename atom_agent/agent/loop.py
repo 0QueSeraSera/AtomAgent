@@ -146,11 +146,19 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
-            # Log LLM request
+            # Calculate total prompt character count
+            prompt_chars = sum(
+                len(str(m.get("content", ""))) if m.get("content") else 0
+                for m in messages
+            )
+
+            # Log LLM request with messages and char count
             logger.llm_request(
                 model=self.model,
                 msg_count=len(messages),
                 tools=len(self.tools),
+                messages=messages,
+                prompt_chars=prompt_chars,
                 extra={"iteration": iteration},
             )
             start_time = time.perf_counter()
@@ -166,7 +174,7 @@ class AgentLoop:
 
             duration_ms = (time.perf_counter() - start_time) * 1000
 
-            # Log LLM response
+            # Log LLM response with content
             usage = response.usage or {}
             logger.llm_response(
                 content_len=len(response.content) if response.content else 0,
@@ -174,6 +182,7 @@ class AgentLoop:
                 tokens_in=usage.get("prompt_tokens", 0),
                 tokens_out=usage.get("completion_tokens", 0),
                 duration_ms=duration_ms,
+                content=response.content,
                 extra={"finish_reason": response.finish_reason, "iteration": iteration},
             )
 

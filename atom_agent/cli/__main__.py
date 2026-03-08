@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Log file path (implies --log-output file)",
     )
+    parser.add_argument(
+        "--log-content",
+        action="store_true",
+        help="Enable verbose content logging (includes full prompts, responses, tool results)",
+    )
 
     return parser.parse_args()
 
@@ -147,6 +152,11 @@ def main() -> int:
     if args.log_file:
         log_config.output = "file"
         log_config.file_path = args.log_file
+
+    if args.log_content:
+        log_config.log_content = True
+        # Increase max content length for verbose logging
+        log_config.max_content_length = 10000
 
     setup_logging(log_config)
 

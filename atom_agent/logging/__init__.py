@@ -51,6 +51,8 @@ __all__ = [
     "setup_logging",
     "quick_setup",
     "get_logger",
+    # Content logging check
+    "is_content_logging_enabled",
     # Context management
     "trace_context",
     "get_trace_id",
@@ -68,6 +70,13 @@ __all__ = [
 
 # Module-level flag to track if logging has been configured
 _CONFIGURED = False
+# Store config for access by logger methods
+_CURRENT_CONFIG: LoggingConfig | None = None
+
+
+def is_content_logging_enabled() -> bool:
+    """Check if verbose content logging is enabled."""
+    return _CURRENT_CONFIG is not None and _CURRENT_CONFIG.log_content
 
 
 class AtomAgentLogger(logging.Logger):
@@ -78,10 +87,36 @@ class AtomAgentLogger(logging.Logger):
         model: str,
         msg_count: int,
         tools: int = 0,
+        messages: list | None = None,
+        prompt_chars: int | None = None,
         **kwargs: object,
     ) -> None:
-        """Log an LLM request."""
-        extra = {"model": model, "msg_count": msg_count, "tools": tools, **kwargs}
+        """Log an LLM request.
+
+        Args:
+            model: Model name
+            msg_count: Number of messages
+            tools: Number of tools available
+            messages: Full message list (only logged if log_content=True)
+            prompt_chars: Total character count of the prompt (optional, auto-calculated if not provided)
+            **kwargs: Additional fields to log
+        """
+        extra: dict = {"model": model, "msg_count": msg_count, "tools": tools, **kwargs}
+
+        # Calculate prompt character count
+        if prompt_chars is not None:
+            extra["prompt_chars"] = prompt_chars
+        elif messages:
+            total_chars = sum(
+                len(str(m.get("content", ""))) if m.get("content") else 0
+                for m in messages
+            )
+            extra["prompt_chars"] = total_chars
+
+        # Log full messages if content logging is enabled
+        if is_content_logging_enabled() and messages:
+            extra["messages"] = messages  # type: ignore
+
         self.info("LLM request", extra=extra)  # type: ignore
 
     def llm_response(
@@ -91,10 +126,21 @@ class AtomAgentLogger(logging.Logger):
         tokens_in: int = 0,
         tokens_out: int = 0,
         duration_ms: float = 0.0,
+        content: str | None = None,
         **kwargs: object,
     ) -> None:
-        """Log an LLM response."""
-        extra = {
+        """Log an LLM response.
+
+        Args:
+            content_len: Length of response content
+            tool_calls: Number of tool calls in response
+            tokens_in: Input tokens used
+            tokens_out: Output tokens used
+            duration_ms: Request duration in milliseconds
+            content: Full response content (only logged if log_content=True)
+            **kwargs: Additional fields to log
+        """
+        extra: dict = {
             "content_len": content_len,
             "tool_calls": tool_calls,
             "tokens_in": tokens_in,
@@ -102,6 +148,11 @@ class AtomAgentLogger(logging.Logger):
             "duration_ms": round(duration_ms, 1),
             **kwargs,
         }
+
+        # Log full content if content logging is enabled
+        if is_content_logging_enabled() and content:
+            extra["content"] = content  # type: ignore
+
         self.debug("LLM response", extra=extra)  # type: ignore
 
     def tool_call(
@@ -112,8 +163,16 @@ class AtomAgentLogger(logging.Logger):
         duration_ms: float = 0.0,
         **kwargs: object,
     ) -> None:
-        """Log a tool call."""
-        extra = {
+        """Log a tool call.
+
+        Args:
+            tool_name: Name of the tool
+            params: Tool parameters
+            result: Tool result (full content only logged if log_content=True)
+            duration_ms: Execution duration in milliseconds
+            **kwargs: Additional fields to log
+        """
+        extra: dict = {
             "tool_name": tool_name,
             "duration_ms": round(duration_ms, 1),
             **kwargs,
@@ -122,6 +181,9 @@ class AtomAgentLogger(logging.Logger):
             extra["params"] = params  # type: ignore
         if result:
             extra["result_len"] = len(result)  # type: ignore
+            # Log full result if content logging is enabled
+            if is_content_logging_enabled():
+                extra["result"] = result  # type: ignore
         self.debug("Tool call", extra=extra)  # type: ignore
 
 
@@ -151,10 +213,13 @@ def setup_logging(config: LoggingConfig | None = None) -> None:
         config: Optional logging configuration. If not provided, uses defaults
                 and environment variables.
     """
-    global _CONFIGURED
+    global _CONFIGURED, _CURRENT_CONFIG
 
     if config is None:
         config = LoggingConfig()
+
+    # Store config for access by logger methods
+    _CURRENT_CONFIG = config
 
     # Get root logger for atom_agent
     root_logger = logging.getLogger("atom_agent")
@@ -197,12 +262,13 @@ def setup_logging(config: LoggingConfig | None = None) -> None:
     _CONFIGURED = True
 
 
-def quick_setup(mode: Literal["debug", "production"] = "debug") -> None:
+def quick_setup(mode: Literal["debug", "production", "verbose"] = "debug") -> None:
     """
     Quick setup for common logging configurations.
 
     Args:
-        mode: "debug" for verbose logging to stderr, "production" for JSON logging to file
+        mode: "debug" for verbose logging to stderr, "production" for JSON logging to file,
+              "verbose" for full content logging (includes prompts, responses, tool results)
     """
     if mode == "debug":
         config = LoggingConfig(
@@ -210,6 +276,15 @@ def quick_setup(mode: Literal["debug", "production"] = "debug") -> None:
             format="text",
             output="stderr",
             max_content_length=500,
+        )
+    elif mode == "verbose":
+        config = LoggingConfig(
+            level="DEBUG",
+            format="json",
+            output="file",
+            file_path=Path("./logs/atom_agent_verbose.log"),
+            max_content_length=10000,  # Allow long content
+            log_content=True,  # Enable full content logging
         )
     else:  # production
         config = LoggingConfig(
