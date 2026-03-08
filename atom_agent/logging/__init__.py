@@ -45,6 +45,29 @@ from atom_agent.logging.redaction import redact_api_key, truncate_content
 if TYPE_CHECKING:
     pass
 
+
+def preview_content(
+    content: str, max_len: int = 500, head_len: int = 200, tail_len: int = 200
+) -> str:
+    """Create a head+tail preview for long content.
+
+    Args:
+        content: The content to preview
+        max_len: Maximum total length before truncating
+        head_len: Characters to show at the start
+        tail_len: Characters to show at the end
+
+    Returns:
+        Preview string with head and tail, or full content if short enough
+    """
+    if len(content) <= max_len:
+        return content
+    truncated_count = len(content) - head_len - tail_len
+    return (
+        f"{content[:head_len]}\n... [{truncated_count} chars truncated] ...\n{content[-tail_len:]}"
+    )
+
+
 __all__ = [
     # Configuration
     "LoggingConfig",
@@ -67,9 +90,10 @@ __all__ = [
     # Handlers
     "MultiChannelHandler",
     "generate_session_timestamp",
-    # Redaction utilities
+    # Redaction/utilities
     "truncate_content",
     "redact_api_key",
+    "preview_content",
 ]
 
 # Module-level flag to track if logging has been configured
@@ -101,7 +125,7 @@ class AtomAgentLogger(logging.Logger):
             model: Model name
             msg_count: Number of messages
             tools: Number of tools available
-            messages: Full message list (only logged if log_content=True)
+            messages: Full message list (preview logged at INFO, full at DEBUG with log_content=True)
             prompt_chars: Total character count of the prompt (optional, auto-calculated if not provided)
             **kwargs: Additional fields to log
         """
@@ -112,16 +136,28 @@ class AtomAgentLogger(logging.Logger):
             extra["prompt_chars"] = prompt_chars
         elif messages:
             total_chars = sum(
-                len(str(m.get("content", ""))) if m.get("content") else 0
-                for m in messages
+                len(str(m.get("content", ""))) if m.get("content") else 0 for m in messages
             )
             extra["prompt_chars"] = total_chars
 
-        # Log full messages if content logging is enabled
-        if is_content_logging_enabled() and messages:
-            extra["messages"] = messages  # type: ignore
+        # Add message preview at INFO level
+        if messages:
+            extra["prompt_preview"] = self._preview_messages(messages)
 
         self.info("LLM request", extra=extra)  # type: ignore
+
+        # Log full messages at DEBUG level if content logging is enabled
+        if is_content_logging_enabled() and messages:
+            self.debug("LLM request (full)", extra={"messages": messages, **kwargs})  # type: ignore
+
+    def _preview_messages(self, messages: list, max_per_msg: int = 100) -> str:
+        """Create a compact preview of the last few messages."""
+        previews = []
+        for m in messages[-3:]:  # Last 3 messages
+            role = m.get("role", "?")
+            content = str(m.get("content", "") or "")[:max_per_msg]
+            previews.append(f"[{role}]: {content}")
+        return " | ".join(previews)
 
     def llm_response(
         self,
@@ -141,7 +177,7 @@ class AtomAgentLogger(logging.Logger):
             tokens_in: Input tokens used
             tokens_out: Output tokens used
             duration_ms: Request duration in milliseconds
-            content: Full response content (only logged if log_content=True)
+            content: Full response content (preview logged at INFO, full at DEBUG with log_content=True)
             **kwargs: Additional fields to log
         """
         extra: dict = {
@@ -153,11 +189,14 @@ class AtomAgentLogger(logging.Logger):
             **kwargs,
         }
 
-        # Log full content if content logging is enabled
-        if is_content_logging_enabled() and content:
-            extra["content"] = content  # type: ignore
+        # Always log preview at INFO level
+        if content:
+            extra["content_preview"] = preview_content(content)
+        self.info("LLM response", extra=extra)  # type: ignore
 
-        self.debug("LLM response", extra=extra)  # type: ignore
+        # Also log full content at DEBUG level if content logging is enabled
+        if is_content_logging_enabled() and content:
+            self.debug("LLM response (full)", extra={"content": content, **kwargs})  # type: ignore
 
     def tool_call(
         self,
@@ -172,7 +211,7 @@ class AtomAgentLogger(logging.Logger):
         Args:
             tool_name: Name of the tool
             params: Tool parameters
-            result: Tool result (full content only logged if log_content=True)
+            result: Tool result (preview logged at INFO, full at DEBUG with log_content=True)
             duration_ms: Execution duration in milliseconds
             **kwargs: Additional fields to log
         """
@@ -185,10 +224,14 @@ class AtomAgentLogger(logging.Logger):
             extra["params"] = params  # type: ignore
         if result:
             extra["result_len"] = len(result)  # type: ignore
-            # Log full result if content logging is enabled
-            if is_content_logging_enabled():
-                extra["result"] = result  # type: ignore
-        self.debug("Tool call", extra=extra)  # type: ignore
+            # Always log preview at INFO level
+            extra["result_preview"] = preview_content(result)
+
+        self.info("Tool call", extra=extra)  # type: ignore
+
+        # Also log full result at DEBUG level if content logging is enabled
+        if is_content_logging_enabled() and result:
+            self.debug("Tool result (full)", extra={"tool_name": tool_name, "result": result})  # type: ignore
 
 
 def get_logger(name: str) -> AtomAgentLogger:
@@ -245,7 +288,7 @@ def setup_logging(config: LoggingConfig | None = None) -> None:
     # Create handler based on configuration
     if config.separate_channels:
         # Use MultiChannelHandler for channel-based separation
-        log_dir = config.log_dir or Path("./logs")
+        log_dir = config.log_dir
         session_timestamp = generate_session_timestamp()
 
         handler: logging.Handler = MultiChannelHandler(
@@ -254,10 +297,17 @@ def setup_logging(config: LoggingConfig | None = None) -> None:
             channels=config.channels_to_log,
             formatter=formatter,
         )
-    elif config.output == "file" and config.file_path:
-        # Ensure directory exists
-        config.file_path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(config.file_path)
+    elif config.output == "file":
+        # Determine file path: use provided file_path or generate one
+        if config.file_path:
+            file_path = config.file_path
+        else:
+            config.log_dir.mkdir(parents=True, exist_ok=True)
+            session_timestamp = generate_session_timestamp()
+            file_path = config.log_dir / f"atom_agent_{session_timestamp}.log"
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(file_path)
         handler.setFormatter(formatter)
     elif config.output == "stdout":
         handler = logging.StreamHandler(sys.stdout)

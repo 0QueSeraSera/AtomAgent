@@ -148,8 +148,7 @@ class AgentLoop:
 
             # Calculate total prompt character count
             prompt_chars = sum(
-                len(str(m.get("content", ""))) if m.get("content") else 0
-                for m in messages
+                len(str(m.get("content", ""))) if m.get("content") else 0 for m in messages
             )
 
             # Log LLM request with messages and char count
@@ -257,7 +256,11 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         logger.info(
             "Agent loop starting",
-            extra={"model": self.model, "max_iterations": self.max_iterations},
+            extra={
+                "model": self.model,
+                "max_iterations": self.max_iterations,
+                "tools": self.tools.tool_names,
+            },
         )
         self._running = True
         await self.scheduler.start()

@@ -21,7 +21,18 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool
-        logger.debug("Tool registered", extra={"tool_name": tool.name})
+        params = list(tool.parameters.get("properties", {}).keys()) if tool.parameters else []
+        desc = tool.description
+        if len(desc) > 80:
+            desc = desc[:80] + "..."
+        logger.info(
+            "Tool registered",
+            extra={
+                "tool_name": tool.name,
+                "description": desc,
+                "params": params,
+            },
+        )
 
     def unregister(self, name: str) -> None:
         """Unregister a tool by name."""

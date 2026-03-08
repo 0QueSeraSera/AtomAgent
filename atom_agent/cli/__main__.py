@@ -72,53 +72,13 @@ def parse_args() -> argparse.Namespace:
         "--debug",
         "-d",
         action="store_true",
-        help="Enable debug logging",
+        help="Enable DEBUG level logging (full content)",
     )
+
     parser.add_argument(
-        "--log-level",
-        choices=["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default=None,
-        help="Log level override",
-    )
-    parser.add_argument(
-        "--log-format",
-        choices=["text", "json"],
-        default=None,
-        help="Log format override",
-    )
-    parser.add_argument(
-        "--log-output",
-        choices=["stderr", "stdout", "file"],
-        default=None,
-        help="Log output destination override",
-    )
-    parser.add_argument(
-        "--log-file",
-        type=Path,
-        default=None,
-        help="Log file path (implies --log-output file)",
-    )
-    parser.add_argument(
-        "--log-content",
+        "--json",
         action="store_true",
-        help="Enable verbose content logging (includes full prompts, responses, tool results)",
-    )
-    parser.add_argument(
-        "--log-separate-channels",
-        action="store_true",
-        help="Enable separate log files per channel (cli, proactive, system, etc.)",
-    )
-    parser.add_argument(
-        "--log-channels",
-        type=str,
-        default=None,
-        help="Comma-separated list of channels to log (e.g., cli,proactive,system)",
-    )
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=None,
-        help="Directory for log files (default: ./logs)",
+        help="Use JSON log format (for machine parsing)",
     )
 
     return parser.parse_args()
@@ -154,36 +114,13 @@ def main() -> int:
         config.model = args.model
 
     # Configure AtomAgent structured logging
-    log_config = LoggingConfig()
-    if args.log_level:
-        log_config.level = args.log_level
-    elif config.debug:
-        log_config.level = "DEBUG"
-
-    if args.log_format:
-        log_config.format = args.log_format
-
-    if args.log_output:
-        log_config.output = args.log_output
-
-    if args.log_file:
-        log_config.output = "file"
-        log_config.file_path = args.log_file
-
-    if args.log_content:
-        log_config.log_content = True
-        # Increase max content length for verbose logging
-        log_config.max_content_length = 10000
-
-    if args.log_separate_channels:
-        log_config.separate_channels = True
-
-    if args.log_channels:
-        log_config.channels_to_log = [c.strip() for c in args.log_channels.split(",") if c.strip()]
-
-    if args.log_dir:
-        log_config.log_dir = args.log_dir
-
+    # Simple defaults: INFO level, text format, file output to ./logs/
+    log_config = LoggingConfig(
+        level="DEBUG" if args.debug else "INFO",
+        format="json" if args.json else "text",
+        output="file",
+        log_content=args.debug,  # Enable full content logging in debug mode
+    )
     setup_logging(log_config)
 
     if config.debug:

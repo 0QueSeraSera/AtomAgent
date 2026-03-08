@@ -353,8 +353,9 @@ class TestLoggingConfig:
         config = LoggingConfig()
         assert config.level == "INFO"
         assert config.format == "text"
-        assert config.output == "stderr"
+        assert config.output == "file"
         assert config.max_content_length == 200
+        assert config.log_dir == Path("./logs")
 
     def test_custom_config(self) -> None:
         """Should accept custom values."""
@@ -436,7 +437,7 @@ class TestAtomAgentLogger:
         """llm_request should log with correct fields."""
         import atom_agent.logging
         atom_agent.logging._CONFIGURED = False
-        setup_logging(LoggingConfig(level="DEBUG"))
+        setup_logging(LoggingConfig(level="DEBUG", output="stderr"))
 
         logger = get_logger("test")
         logger.llm_request(model="test-model", msg_count=5, tools=3)
@@ -449,7 +450,7 @@ class TestAtomAgentLogger:
         """llm_response should log with correct fields."""
         import atom_agent.logging
         atom_agent.logging._CONFIGURED = False
-        setup_logging(LoggingConfig(level="DEBUG"))
+        setup_logging(LoggingConfig(level="DEBUG", output="stderr"))
 
         logger = get_logger("test")
         logger.llm_response(content_len=100, tool_calls=2, tokens_in=50, tokens_out=25, duration_ms=123.4)
@@ -461,7 +462,7 @@ class TestAtomAgentLogger:
         """tool_call should log with correct fields."""
         import atom_agent.logging
         atom_agent.logging._CONFIGURED = False
-        setup_logging(LoggingConfig(level="DEBUG"))
+        setup_logging(LoggingConfig(level="DEBUG", output="stderr"))
 
         logger = get_logger("test")
         logger.tool_call(tool_name="test_tool", params={"arg": "value"}, result="success", duration_ms=50.0)

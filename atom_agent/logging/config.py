@@ -18,7 +18,7 @@ class LoggingConfig:
 
     level: str = "INFO"
     format: Literal["text", "json"] = "text"
-    output: Literal["stderr", "stdout", "file"] = "stderr"
+    output: Literal["stderr", "stdout", "file"] = "file"
     file_path: Path | None = None
     max_content_length: int = 200
     component_levels: dict[str, str] = field(default_factory=dict)
@@ -27,7 +27,7 @@ class LoggingConfig:
     # Multi-channel file separation
     separate_channels: bool = False
     channels_to_log: list[str] | None = None  # None = log all channels
-    log_dir: Path | None = None  # Base directory for log files (default: ./logs)
+    log_dir: Path = field(default_factory=lambda: Path("./logs"))
 
     def __post_init__(self) -> None:
         """Apply environment variable overrides."""
