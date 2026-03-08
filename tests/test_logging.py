@@ -96,7 +96,7 @@ class TestRedactApiKey:
         """Should redact multiple API keys."""
         text = "Keys: Bearer XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX and api_key=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         result = redact_api_key(text)
-        assert "api_key=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" not in result
+        assert "Bearer XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" not in result
         assert "api_key=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" not in result
         assert result.count("[REDACTED]") == 2
 
@@ -235,7 +235,7 @@ class TestStructuredFormatter:
         )
 
         result = formatter.format(record)
-        assert "api_key=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" not in result
+        assert "Bearer XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" not in result
         assert "[REDACTED]" in result
 
     def test_truncates_long_content(self) -> None:
