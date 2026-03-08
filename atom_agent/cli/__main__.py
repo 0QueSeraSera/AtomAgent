@@ -27,7 +27,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from atom_agent.config import Config
+from atom_agent.env_config import Config
 from atom_agent.logging import LoggingConfig, get_logger, setup_logging
 
 logger = get_logger("cli.main")
