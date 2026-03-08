@@ -2,7 +2,10 @@
 
 from typing import Any
 
+from atom_agent.logging import get_logger
 from atom_agent.tools.base import Tool
+
+logger = get_logger("tools.registry")
 
 
 class ToolRegistry:
@@ -18,10 +21,13 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool
+        logger.debug("Tool registered", extra={"tool_name": tool.name})
 
     def unregister(self, name: str) -> None:
         """Unregister a tool by name."""
-        self._tools.pop(name, None)
+        if name in self._tools:
+            self._tools.pop(name)
+            logger.debug("Tool unregistered", extra={"tool_name": name})
 
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
@@ -41,6 +47,9 @@ class ToolRegistry:
 
         tool = self._tools.get(name)
         if not tool:
+            logger.warning(
+                "Tool not found", extra={"tool_name": name, "available": self.tool_names}
+            )
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
         try:
@@ -50,12 +59,24 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
+                logger.warning(
+                    "Tool validation failed",
+                    extra={"tool_name": name, "errors": errors},
+                )
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _HINT
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
+                logger.warning(
+                    "Tool returned error",
+                    extra={"tool_name": name, "error": result[:100]},
+                )
                 return result + _HINT
             return result
         except Exception as e:
+            logger.error(
+                "Tool execution failed",
+                extra={"tool_name": name, "error": str(e)},
+            )
             return f"Error executing {name}: {str(e)}" + _HINT
 
     @property

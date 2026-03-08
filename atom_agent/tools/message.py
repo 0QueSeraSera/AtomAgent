@@ -2,8 +2,8 @@
 
 from typing import Any, Awaitable, Callable
 
-from atom_agent.tools.base import Tool
 from atom_agent.bus.events import OutboundMessage
+from atom_agent.tools.base import Tool
 
 
 class MessageTool(Tool):

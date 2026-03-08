@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
+import time
 from typing import Any
 
 import httpx
 
+from atom_agent.logging import get_logger
 from atom_agent.provider.base import LLMProvider, LLMResponse, ToolCallRequest
 
-logger = logging.getLogger(__name__)
+logger = get_logger("provider.deepseek")
 
 
 class DeepSeekProvider(LLMProvider):
@@ -58,7 +59,17 @@ class DeepSeekProvider(LLMProvider):
             "Content-Type": "application/json",
         }
 
-        logger.debug(f"DeepSeek request: model={model}, messages={len(messages)}, tools={len(tools) if tools else 0}")
+        logger.debug(
+            "DeepSeek request",
+            extra={
+                "model": model,
+                "msg_count": len(messages),
+                "tools": len(tools) if tools else 0,
+                "max_tokens": max_tokens,
+            },
+        )
+
+        start_time = time.perf_counter()
 
         try:
             response = await self._client.post(
@@ -86,15 +97,28 @@ class DeepSeekProvider(LLMProvider):
                 except json.JSONDecodeError:
                     parsed_args = {}
 
-                tool_calls.append(ToolCallRequest(
-                    id=tc.get("id", ""),
-                    name=function.get("name", ""),
-                    arguments=parsed_args,
-                ))
+                tool_calls.append(
+                    ToolCallRequest(
+                        id=tc.get("id", ""),
+                        name=function.get("name", ""),
+                        arguments=parsed_args,
+                    )
+                )
 
             usage = data.get("usage", {})
+            duration_ms = (time.perf_counter() - start_time) * 1000
 
-            logger.debug(f"DeepSeek response: content_len={len(content) if content else 0}, tool_calls={len(tool_calls)}, finish_reason={finish_reason}")
+            logger.debug(
+                "DeepSeek response",
+                extra={
+                    "content_len": len(content) if content else 0,
+                    "tool_calls": len(tool_calls),
+                    "finish_reason": finish_reason,
+                    "tokens_in": usage.get("prompt_tokens", 0),
+                    "tokens_out": usage.get("completion_tokens", 0),
+                    "duration_ms": round(duration_ms, 1),
+                },
+            )
 
             return LLMResponse(
                 content=content,
@@ -105,13 +129,19 @@ class DeepSeekProvider(LLMProvider):
 
         except httpx.HTTPStatusError as e:
             error_body = e.response.text if e.response else "Unknown error"
-            logger.error(f"DeepSeek API error: {e.response.status_code} - {error_body}")
+            logger.error(
+                "DeepSeek API error",
+                extra={
+                    "status_code": e.response.status_code if e.response else None,
+                    "error": error_body[:200],
+                },
+            )
             return LLMResponse(
                 content=None,
                 finish_reason="error",
             )
         except Exception as e:
-            logger.error(f"DeepSeek request failed: {e}")
+            logger.error("DeepSeek request failed", extra={"error": str(e)})
             return LLMResponse(
                 content=None,
                 finish_reason="error",

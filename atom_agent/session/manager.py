@@ -6,6 +6,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from atom_agent.logging import get_logger
+
+logger = get_logger("session.manager")
+
 
 def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
@@ -16,6 +20,7 @@ def ensure_dir(path: Path) -> Path:
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
     import re
+
     _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
     return _UNSAFE_CHARS.sub("_", name).strip()
 
@@ -115,11 +120,18 @@ class SessionManager:
             The session.
         """
         if key in self._cache:
+            logger.debug("Session cache hit", extra={"session_key": key})
             return self._cache[key]
 
         session = self._load(key)
         if session is None:
             session = Session(key=key)
+            logger.debug("Session created", extra={"session_key": key})
+        else:
+            logger.debug(
+                "Session loaded from disk",
+                extra={"session_key": key, "msg_count": len(session.messages)},
+            )
 
         self._cache[key] = session
         return session
@@ -165,26 +177,38 @@ class SessionManager:
                 last_consolidated=last_consolidated,
                 proactive_context=proactive_context,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to load session", extra={"session_key": key, "error": str(e)})
             return None
 
     def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
 
-        with open(path, "w", encoding="utf-8") as f:
-            metadata_line = {
-                "_type": "metadata",
-                "key": session.key,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
-                "proactive_context": session.proactive_context,
-            }
-            f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-            for msg in session.messages:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                metadata_line = {
+                    "_type": "metadata",
+                    "key": session.key,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated,
+                    "proactive_context": session.proactive_context,
+                }
+                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                for msg in session.messages:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+            logger.debug(
+                "Session saved",
+                extra={"session_key": session.key, "msg_count": len(session.messages)},
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save session", extra={"session_key": session.key, "error": str(e)}
+            )
+            raise
 
         self._cache[session.key] = session
 

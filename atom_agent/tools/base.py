@@ -84,9 +84,11 @@ class Tool(ABC):
             return val
         if target_type == "integer" and isinstance(val, int) and not isinstance(val, bool):
             return val
-        if (
-            target_type in self._TYPE_MAP
-            and target_type not in ("boolean", "integer", "array", "object")
+        if target_type in self._TYPE_MAP and target_type not in (
+            "boolean",
+            "integer",
+            "array",
+            "object",
         ):
             expected = self._TYPE_MAP[target_type]
             if isinstance(val, expected):
@@ -139,7 +141,11 @@ class Tool(ABC):
             return [f"{label} should be integer"]
         if t == "number" and (not isinstance(val, self._TYPE_MAP[t]) or isinstance(val, bool)):
             return [f"{label} should be number"]
-        if t in self._TYPE_MAP and t not in ("integer", "number") and not isinstance(val, self._TYPE_MAP[t]):
+        if (
+            t in self._TYPE_MAP
+            and t not in ("integer", "number")
+            and not isinstance(val, self._TYPE_MAP[t])
+        ):
             return [f"{label} should be {t}"]
 
         errors = []

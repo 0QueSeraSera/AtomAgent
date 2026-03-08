@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from atom_agent.agent.context import ContextBuilder
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.bus.queue import MessageBus, ProactiveScheduler
+from atom_agent.logging import get_logger, set_session_key, trace_context
 from atom_agent.memory.store import MemoryStore
 from atom_agent.provider.base import LLMProvider
 from atom_agent.session.manager import Session, SessionManager
@@ -20,6 +22,8 @@ from atom_agent.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from atom_agent.bus.events import ProactiveTask
+
+logger = get_logger("agent.loop")
 
 
 class AgentLoop:
@@ -118,12 +122,14 @@ class AgentLoop:
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+
         def _fmt(tc):
             args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
             val = next(iter(args.values()), None) if isinstance(args, dict) else None
             if not isinstance(val, str):
                 return tc.name
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     async def _run_agent_loop(
@@ -140,6 +146,15 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
+            # Log LLM request
+            logger.llm_request(
+                model=self.model,
+                msg_count=len(messages),
+                tools=len(self.tools),
+                extra={"iteration": iteration},
+            )
+            start_time = time.perf_counter()
+
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
@@ -147,6 +162,19 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 reasoning_effort=self.reasoning_effort,
+            )
+
+            duration_ms = (time.perf_counter() - start_time) * 1000
+
+            # Log LLM response
+            usage = response.usage or {}
+            logger.llm_response(
+                content_len=len(response.content) if response.content else 0,
+                tool_calls=len(response.tool_calls) if response.tool_calls else 0,
+                tokens_in=usage.get("prompt_tokens", 0),
+                tokens_out=usage.get("completion_tokens", 0),
+                duration_ms=duration_ms,
+                extra={"finish_reason": response.finish_reason, "iteration": iteration},
             )
 
             if response.has_tool_calls:
@@ -177,8 +205,15 @@ class AgentLoop:
 
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    tool_start = time.perf_counter()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    tool_duration = (time.perf_counter() - tool_start) * 1000
+                    logger.tool_call(
+                        tool_name=tool_call.name,
+                        params=tool_call.arguments,
+                        result=result,
+                        duration_ms=tool_duration,
+                    )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -198,6 +233,10 @@ class AgentLoop:
                 break
 
         if final_content is None and iteration >= self.max_iterations:
+            logger.warning(
+                "Max iterations reached",
+                extra={"max_iterations": self.max_iterations, "tools_used": len(tools_used)},
+            )
             final_content = (
                 f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
                 "without completing the task. You can try breaking the task into smaller steps."
@@ -207,6 +246,10 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        logger.info(
+            "Agent loop starting",
+            extra={"model": self.model, "max_iterations": self.max_iterations},
+        )
         self._running = True
         await self.scheduler.start()
 
@@ -222,11 +265,14 @@ class AgentLoop:
                 task = asyncio.create_task(self._dispatch(msg))
                 self._active_tasks.setdefault(msg.session_key, []).append(task)
                 task.add_done_callback(
-                    lambda t, k=msg.session_key: self._active_tasks.get(k, [])
-                    and self._active_tasks[k].remove(t)
-                    if t in self._active_tasks.get(k, [])
-                    else None
+                    lambda t, k=msg.session_key: (
+                        self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                        if t in self._active_tasks.get(k, [])
+                        else None
+                    )
                 )
+
+        logger.info("Agent loop stopped")
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks for the session."""
@@ -245,33 +291,50 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
-        async with self._processing_lock:
-            try:
-                response = await self._process_message(msg)
-                if response is not None:
-                    await self.bus.publish_outbound(response)
-                elif msg.channel == "cli":
+        with trace_context(session_key=msg.session_key):
+            logger.info(
+                "Message received",
+                extra={
+                    "channel": msg.channel,
+                    "chat_id": msg.chat_id,
+                    "content_len": len(msg.content),
+                },
+            )
+            async with self._processing_lock:
+                try:
+                    response = await self._process_message(msg)
+                    if response is not None:
+                        await self.bus.publish_outbound(response)
+                    elif msg.channel == "cli":
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=msg.metadata or {},
+                            )
+                        )
+                except asyncio.CancelledError:
+                    logger.info(
+                        "Message processing cancelled", extra={"session_key": msg.session_key}
+                    )
+                    raise
+                except Exception as e:
+                    logger.error(
+                        "Message processing failed",
+                        extra={"error": str(e), "session_key": msg.session_key},
+                    )
                     await self.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
                             chat_id=msg.chat_id,
-                            content="",
-                            metadata=msg.metadata or {},
+                            content="Sorry, I encountered an error.",
                         )
                     )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    )
-                )
 
     def stop(self) -> None:
         """Stop the agent loop."""
+        logger.info("Stop requested")
         self._running = False
         # Stop the scheduler
         asyncio.create_task(self.scheduler.stop())
@@ -283,6 +346,9 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
+        # Set session key for logging context
+        key = session_key or msg.session_key
+        set_session_key(key)
 
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -291,6 +357,10 @@ class AgentLoop:
             )
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
+            logger.debug(
+                "Session loaded",
+                extra={"session_key": key, "msg_count": len(session.messages)},
+            )
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
@@ -312,9 +382,11 @@ class AgentLoop:
         if msg.channel == "proactive":
             key = session_key or msg.session_key
             session = self.sessions.get_or_create(key)
-            self._set_tool_context(
-                msg.channel, msg.chat_id, msg.metadata.get("message_id")
+            logger.debug(
+                "Session loaded",
+                extra={"session_key": key, "msg_count": len(session.messages), "proactive": True},
             )
+            self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
                 history=history,
@@ -333,6 +405,10 @@ class AgentLoop:
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
+        logger.debug(
+            "Session loaded",
+            extra={"session_key": key, "msg_count": len(session.messages)},
+        )
 
         # Slash commands
         cmd = msg.content.strip().lower()
@@ -470,10 +546,9 @@ class AgentLoop:
                         if c.get("type") == "text" and isinstance(c.get("text"), str):
                             if c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                                 continue
-                        if (
-                            c.get("type") == "image_url"
-                            and c.get("image_url", {}).get("url", "").startswith("data:image/")
-                        ):
+                        if c.get("type") == "image_url" and c.get("image_url", {}).get(
+                            "url", ""
+                        ).startswith("data:image/"):
                             filtered.append({"type": "text", "text": "[image]"})
                         else:
                             filtered.append(c)
@@ -503,9 +578,7 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Process a message directly (for CLI or programmatic usage)."""
-        msg = InboundMessage(
-            channel=channel, sender_id="user", chat_id=chat_id, content=content
-        )
+        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
         response = await self._process_message(
             msg, session_key=session_key, on_progress=on_progress
         )

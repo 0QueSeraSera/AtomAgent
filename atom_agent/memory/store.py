@@ -6,9 +6,13 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from atom_agent.logging import get_logger
+
 if TYPE_CHECKING:
     from atom_agent.provider.base import LLMProvider
     from atom_agent.session.manager import Session
+
+logger = get_logger("memory.store")
 
 
 def ensure_dir(path: Path) -> Path:
@@ -98,6 +102,15 @@ class MemoryStore:
             if not old_messages:
                 return True
 
+        logger.info(
+            "Memory consolidation starting",
+            extra={
+                "session_key": session.key,
+                "msg_count": len(old_messages),
+                "archive_all": archive_all,
+            },
+        )
+
         lines = []
         for m in old_messages:
             if not m.get("content"):
@@ -130,6 +143,10 @@ class MemoryStore:
             )
 
             if not response.has_tool_calls:
+                logger.warning(
+                    "Memory consolidation failed: no tool call",
+                    extra={"session_key": session.key},
+                )
                 return False
 
             args = response.tool_calls[0].arguments
@@ -156,6 +173,14 @@ class MemoryStore:
                     self.write_long_term(update)
 
             session.last_consolidated = 0 if archive_all else len(session.messages) - keep_count
+            logger.info(
+                "Memory consolidation complete",
+                extra={"session_key": session.key, "last_consolidated": session.last_consolidated},
+            )
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(
+                "Memory consolidation failed",
+                extra={"session_key": session.key, "error": str(e)},
+            )
             return False
