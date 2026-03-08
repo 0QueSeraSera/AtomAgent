@@ -8,7 +8,13 @@ AtomAgent is a Python framework for building proactive, long-running AI agents. 
 
 ## Development Commands
 
+**IMPORTANT: Always use a virtual environment. Never install to system Python.**
+
 ```bash
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+
 # Install development dependencies
 pip install -e ".[dev]"
 

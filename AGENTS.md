@@ -180,6 +180,25 @@ When conversation history exceeds `memory_window`, background consolidation:
 
 Tools extend the `Tool` base class and are registered via `agent.register_tool()`.
 
+## Python Environment Setup
+
+**CRITICAL: Always use a virtual environment. NEVER install packages to system Python.**
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate  # Linux/macOS
+# or
+.venv\Scripts\activate     # Windows
+
+# Install dependencies
+pip install -e ".[dev]"
+```
+
+Before running any commands, ensure your virtual environment is active. You should see `(.venv)` in your terminal prompt.
+
 ## Commands
 
 ```bash
@@ -195,6 +214,7 @@ ruff check atom_agent/
 
 ## Important Notes
 
+- **Virtual environment is mandatory** - never install to system Python
 - Python 3.11+ required
 - Uses asyncio throughout
 - No external LLM SDK dependencies (providers implement their own)
