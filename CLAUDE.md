@@ -45,7 +45,53 @@ python examples/basic_agent.py
 
 1. **Read AGENTS.md first** - it contains essential principles about user experience verification
 2. **Check `agent_docs/progress.md`** - see what's in progress
-3. **Verify with real execution** - don't rely solely on tests
+3. **Create a git worktree** - use isolated worktrees for development (see below)
+4. **Verify with real execution** - don't rely solely on tests
+
+## Git Worktree Development
+
+Claude Code should use git worktrees for isolated development. This prevents conflicts and keeps
+the main repository stable.
+
+### Quick Reference
+
+| Task Type | Worktree Name | Branch Name |
+|-----------|---------------|-------------|
+| Bug fix | `atomAgent-worktree-fix-{desc}` | `fix/{desc}` |
+| Feature | `atomAgent-worktree-feat-{desc}` | `feat/{desc}` |
+| Performance | `atomAgent-worktree-perf-{desc}` | `perf/{desc}` |
+| Refactor | `atomAgent-worktree-refactor-{desc}` | `refactor/{desc}` |
+| Docs | `atomAgent-worktree-docs-{desc}` | `docs/{desc}` |
+
+### Creating a Worktree
+
+```bash
+# Create worktree with new branch from main
+git worktree add ../atomAgent-worktree-feat-new-provider -b feat/new-provider
+
+# Work in the worktree
+cd ../atomAgent-worktree-feat-new-provider
+# ... make changes, commit, push ...
+```
+
+### Worktree Constraints
+
+**When working in a worktree, you MUST NOT:**
+- Modify the `main` branch directly
+- Push to other branches or worktrees
+- Perform operations on the main repository
+
+**You MAY:**
+- Commit to your worktree's branch
+- Push your branch to remote
+- Create PRs from your branch
+
+### Cleanup After Merge
+
+```bash
+# Remove worktree after PR is merged
+git worktree remove ../atomAgent-worktree-feat-new-provider
+```
 
 ## Context Files
 

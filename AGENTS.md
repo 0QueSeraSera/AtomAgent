@@ -59,6 +59,85 @@ atom_agent/
     └── message.py # MessageTool for proactive messaging
 ```
 
+## Git Worktree Development Pattern
+
+Agents MUST use git worktrees for isolated development when working on features or bug fixes.
+This ensures the main repository remains stable and allows parallel development.
+
+### Worktree Naming Convention
+
+```
+atomAgent-worktree-{type}-{description}
+```
+
+- **type**: `fix`, `feat`, `perf`, `refactor`, `docs`, `test`, `chore`
+- **description**: short kebab-case description of the work
+
+Examples:
+- `atomAgent-worktree-fix-login-timeout`
+- `atomAgent-worktree-feat-openai-provider`
+- `atomAgent-worktree-perf-context-building`
+
+### Branch Naming Convention
+
+Branches follow the same prefix pattern:
+
+```
+{type}/{description}
+```
+
+Examples:
+- `fix/login-timeout`
+- `feat/openai-provider`
+- `perf/context-building`
+
+### Worktree Rules
+
+**CRITICAL: Agents working within a git worktree are NOT allowed to:**
+- Manipulate the main repository (`main` branch)
+- Push to or modify other agents' branches
+- Create or delete branches in the main repo
+- Merge branches or perform operations affecting the main repo
+
+**Agents CAN:**
+- Commit to their own worktree's branch
+- Push their own branch to remote
+- Create commits and update their worktree's branch
+
+### Creating a Worktree
+
+```bash
+# Create a worktree with a new branch
+git worktree add ../atomAgent-worktree-feat-my-feature -b feat/my-feature
+
+# Or from an existing branch
+git worktree add ../atomAgent-worktree-fix-bug -b fix/bug-name origin/main
+```
+
+### Worktree Workflow
+
+1. **Create worktree** for your task with appropriate naming
+2. **Do your work** in the worktree directory
+3. **Commit and push** only to your branch
+4. **Create PR** when ready for review
+5. **Clean up** worktree after merge:
+   ```bash
+   git worktree remove ../atomAgent-worktree-feat-my-feature
+   ```
+
+### Listing and Managing Worktrees
+
+```bash
+# List all worktrees
+git worktree list
+
+# Remove a worktree (after work is complete)
+git worktree remove <path>
+
+# Prune stale worktree references
+git worktree prune
+```
+
 ## Development Workflow
 
 ### Before Making Changes
@@ -66,6 +145,7 @@ atom_agent/
 1. Read `agent_docs/plan.md` and `agent_docs/progress.md`
 2. Understand the existing code by reading relevant source files
 3. Identify affected components and their dependencies
+4. **Create a git worktree** for isolated development
 
 ### After Making Changes
 
