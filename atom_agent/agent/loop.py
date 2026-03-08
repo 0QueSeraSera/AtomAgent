@@ -304,13 +304,10 @@ class AgentLoop:
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
         with trace_context(session_key=msg.session_key):
-            logger.info(
-                "Message received",
-                extra={
-                    "channel": msg.channel,
-                    "chat_id": msg.chat_id,
-                    "content_len": len(msg.content),
-                },
+            logger.user_message(
+                content=msg.content,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
             )
             async with self._processing_lock:
                 try:

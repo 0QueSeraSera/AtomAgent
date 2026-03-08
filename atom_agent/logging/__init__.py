@@ -198,6 +198,36 @@ class AtomAgentLogger(logging.Logger):
         if is_content_logging_enabled() and content:
             self.debug("LLM response (full)", extra={"content": content, **kwargs})  # type: ignore
 
+    def user_message(
+        self,
+        content: str,
+        channel: str = "cli",
+        chat_id: str = "unknown",
+        **kwargs: object,
+    ) -> None:
+        """Log a user message received.
+
+        Args:
+            content: The user's message content
+            channel: Communication channel (cli, api, etc.)
+            chat_id: Chat/session identifier
+            **kwargs: Additional fields to log
+        """
+        extra: dict = {
+            "channel": channel,
+            "chat_id": chat_id,
+            "content_len": len(content),
+            **kwargs,
+        }
+
+        # Always log preview at INFO level
+        extra["content_preview"] = preview_content(content)
+        self.info("User message", extra=extra)  # type: ignore
+
+        # Also log full content at DEBUG level if content logging is enabled
+        if is_content_logging_enabled():
+            self.debug("User message (full)", extra={"content": content, **kwargs})  # type: ignore
+
     def tool_call(
         self,
         tool_name: str,
