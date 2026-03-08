@@ -1,5 +1,7 @@
 """Context builder for assembling agent prompts."""
 
+from __future__ import annotations
+
 import base64
 import mimetypes
 import platform
@@ -7,6 +9,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from atom_agent.workspace import WorkspaceManager
 
 
 def detect_image_mime(data: bytes) -> str | None:
@@ -23,15 +27,20 @@ def detect_image_mime(data: bytes) -> str | None:
 
 
 class ContextBuilder:
-    """Builds the context (system prompt + messages) for the agent."""
+    """Builds the context (system prompt + messages) for the agent.
 
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
+    Uses file-based identity from IDENTITY.md via WorkspaceManager,
+    with fallback to default template when file doesn't exist.
+    """
+
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
     def __init__(self, workspace: Path, agent_name: str = "AtomAgent"):
         self.workspace = workspace
         self.agent_name = agent_name
         self.memory_dir = workspace / "memory"
+        self._workspace_manager = WorkspaceManager(workspace)
 
     def build_system_prompt(self) -> str:
         """Build the system prompt from identity and bootstrap files."""
@@ -48,14 +57,20 @@ class ContextBuilder:
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        """Get the core identity section."""
+        """Get the core identity section from IDENTITY.md or default template."""
+        # Get identity content from file (with fallback)
+        identity_content = self._workspace_manager.get_identity()
+
+        # Build runtime info
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
-        return f"""# {self.agent_name}
-
-You are {self.agent_name}, a proactive AI assistant capable of long-running tasks and autonomous operation.
+        # Build the full identity with runtime context
+        # If identity starts with # heading, preserve it; otherwise wrap it
+        if identity_content.strip().startswith("#"):
+            # Add runtime and workspace sections after the identity content
+            return f"""{identity_content.strip()}
 
 ## Runtime
 {runtime}
@@ -65,7 +80,30 @@ Your workspace is at: {workspace_path}
 - Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
 - History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
 
-## {self.agent_name} Guidelines
+## Guidelines
+- State intent before tool calls, but NEVER predict or claim results before receiving them.
+- Before modifying a file, read it first. Do not assume files or directories exist.
+- After writing or editing a file, re-read it if accuracy matters.
+- If a tool call fails, analyze the error before retrying with a different approach.
+- Ask for clarification when the request is ambiguous.
+- You can operate autonomously for long-running tasks. Use the message tool to update users proactively.
+
+Reply directly with text for conversations. Use the 'message' tool for proactive communication."""
+        else:
+            # Wrap in agent name header
+            return f"""# {self.agent_name}
+
+{identity_content.strip()}
+
+## Runtime
+{runtime}
+
+## Workspace
+Your workspace is at: {workspace_path}
+- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
+- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+
+## Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
 - After writing or editing a file, re-read it if accuracy matters.
