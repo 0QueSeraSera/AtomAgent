@@ -75,6 +75,9 @@ Workspace Registry -> Workspace Scanner -> PROACTIVE.md Parser -> Due Task Evalu
 
 The file is markdown with a machine-readable JSON block.
 
+Normative rules for parser/scheduler/daemon behavior are defined in:
+- `agent_docs/proactive-task-rules.md`
+
 ~~~markdown
 # Proactive Configuration
 
@@ -120,6 +123,7 @@ Optional policy notes:
 
 1. `once`
    - Fires exactly once when `now >= at` and not already completed.
+   - After a successful fire, scheduler marks it completed and it is no longer eligible.
 
 2. `cron`
    - Evaluated using workspace timezone.
@@ -128,6 +132,75 @@ Optional policy notes:
 3. `interval`
    - Repeats every `every_sec`.
    - Optional `jitter_sec` shifts each run by random offset.
+
+Your interpretation is correct:
+- `once`: one-time and auto-disabled after firing.
+- `cron`: periodic at calendar timestamps.
+- `interval`: continuous periodic loop with configurable gaps.
+
+## Normative Schedule Contract (Drift Prevention)
+
+### Common Rules
+
+1. All scheduler comparisons use timezone-aware datetimes.
+2. Workspace `timezone` is required for `cron`; if missing, default to `UTC`.
+3. `session_key` format is always `channel:chat_id`.
+4. Task-level `enabled=false` excludes task from scheduling without deleting config.
+5. Daemon stores per-task runtime state in `.proactive/state.json`.
+
+### Jitter Rules
+
+1. `jitter_sec` is delay-only (`0..jitter_sec`), never early-fire.
+2. Jitter is sampled per occurrence, not once globally.
+3. The sampled scheduled fire time is persisted as `next_run` to remain stable across restart.
+
+### Downtime / Catch-Up Rules
+
+1. `once`
+   - If missed while daemon was down, run on next startup if `now >= at` and task not completed.
+2. `cron`
+   - On restart, run at most one catch-up execution (latest missed occurrence), then continue normal schedule.
+3. `interval`
+   - On restart, do not replay multiple missed intervals; schedule next run from current time plus interval/jitter.
+
+### Non-Overlap Rules
+
+1. Same task ID cannot run concurrently.
+2. If a task is due while previous run is still in progress, skip that due tick and compute the next schedule point.
+3. Execution status transitions:
+   - `idle -> running -> success|failed -> idle`
+4. Failed runs update `last_error` and can apply cooldown/backoff before next eligibility.
+
+### Per-Type Deterministic Behavior
+
+1. `once`
+   - Inputs: `at`, optional `jitter_sec`.
+   - Effective fire time: `at + sampled_delay`.
+   - Post-success: mark `completed_at`, set `enabled=false` in runtime state.
+
+2. `cron`
+   - Inputs: `cron`, `timezone`, optional `jitter_sec`.
+   - Base schedule is cron timestamp.
+   - Effective fire time per occurrence: `base_time + sampled_delay`.
+   - Next occurrence computed from cron expression, not from completion time.
+
+3. `interval`
+   - Inputs: `every_sec`, optional `jitter_sec`.
+   - Next base time is previous effective fire time + `every_sec`.
+   - Effective fire time: `base_time + sampled_delay`.
+   - This keeps cadence consistent and avoids drift from variable task execution duration.
+
+## Daemon Loop Contract
+
+1. Poll cadence (`poll_sec`) controls how often due checks run.
+2. For each cycle:
+   - load/refresh workspace proactive config
+   - load runtime state
+   - compute due tasks
+   - dispatch eligible tasks
+   - persist updated state atomically
+3. Config edits should be picked up without daemon restart.
+4. Invalid workspace config should not crash daemon; it should be logged and skipped.
 
 ## Dispatch and Session Routing
 

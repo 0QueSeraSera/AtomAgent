@@ -23,6 +23,14 @@ Feature: background daemon runtime with proactive message scheduling (randomized
   - `agent_docs/plan.md` -> `agent_docs/archived/file-based-context/plan.md`
   - `agent_docs/progress.md` -> `agent_docs/archived/file-based-context/progress.md`
 - [x] Replaced planning docs with new daemon/proactive-focused plan.
+- [x] Clarified normative scheduling contract in `agent_docs/plan.md` to prevent drift across implementations:
+  - precise `once`/`cron`/`interval` semantics
+  - jitter behavior
+  - downtime catch-up behavior
+  - non-overlap and daemon loop rules
+- [x] Added authoritative proactive rules document:
+  - `agent_docs/proactive-task-rules.md`
+  - includes context-brief injection policy and agent edit authority for `PROACTIVE.md`
 
 ## Next Implementation Steps
 
