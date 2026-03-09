@@ -15,6 +15,8 @@ Usage:
     atom-agent workspace create <name> Create new workspace
     atom-agent proactive validate    Validate PROACTIVE.md configuration
     atom-agent proactive show        Show normalized proactive task summary
+    atom-agent daemon run --once    Run one proactive daemon cycle
+    atom-agent daemon run           Run daemon polling loop
 
     # Session management
     atom-agent session list          List sessions in current workspace
@@ -177,6 +179,33 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Workspace directory",
+    )
+
+    # daemon subcommand
+    daemon_parser = subparsers.add_parser("daemon", help="Run proactive daemon service")
+    daemon_parser.add_argument(
+        "action",
+        choices=["run"],
+        nargs="?",
+        default="run",
+        help="Action to perform",
+    )
+    daemon_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one daemon cycle and exit",
+    )
+    daemon_parser.add_argument(
+        "--poll-sec",
+        type=float,
+        default=30.0,
+        help="Polling interval in seconds for loop mode",
+    )
+    daemon_parser.add_argument(
+        "--workspace-path",
+        type=Path,
+        default=None,
+        help="Optional single workspace path override",
     )
 
     # session subcommand
@@ -462,6 +491,76 @@ def cmd_proactive(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_daemon(args: argparse.Namespace) -> int:
+    """Run daemon service for proactive scheduling."""
+    from atom_agent.daemon import DaemonService
+
+    # Subcommands usually skip logging setup in main(), so daemon configures it here.
+    config = Config.load(env_file=args.env_file)
+    if args.debug:
+        config.debug = True
+    if args.model:
+        config.model = args.model
+    if args.workspace:
+        config.workspace = args.workspace
+
+    log_config = LoggingConfig(
+        level="DEBUG" if args.debug else "INFO",
+        format="json" if args.json else "text",
+        output="file",
+        log_content=args.debug,
+    )
+    setup_logging(log_config)
+
+    errors = config.validate(args.provider)
+    if errors:
+        for error in errors:
+            print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    try:
+        provider = get_provider(args.provider, config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    workspace_paths = [args.workspace_path] if args.workspace_path else None
+    service = DaemonService(
+        provider=provider,
+        model=config.model,
+        poll_sec=args.poll_sec,
+        workspace_paths=workspace_paths,
+    )
+
+    if args.once:
+        reports = asyncio.run(service.run_once())
+        if not reports:
+            print("No due proactive tasks.")
+            return 0
+
+        for report in reports:
+            if report.status == "success":
+                print(
+                    f"[{report.workspace}] {report.task_id}: success "
+                    f"(outputs={report.output_count})"
+                )
+            else:
+                print(
+                    f"[{report.workspace}] {report.task_id}: failed ({report.error})",
+                    file=sys.stderr,
+                )
+        return 1 if any(report.status != "success" for report in reports) else 0
+
+    print(f"Starting daemon loop (poll={args.poll_sec}s). Press Ctrl+C to stop.")
+    try:
+        asyncio.run(service.run_forever())
+    except KeyboardInterrupt:
+        print("\nDaemon interrupted.")
+        return 130
+
+    return 0
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Manage sessions."""
     from atom_agent.cli.management import ensure_workspace_initialized
@@ -561,6 +660,8 @@ def main() -> int:
         return cmd_workspace(args)
     elif args.command == "proactive":
         return cmd_proactive(args)
+    elif args.command == "daemon":
+        return cmd_daemon(args)
     elif args.command == "session":
         return cmd_session(args)
     elif args.command == "tui":
