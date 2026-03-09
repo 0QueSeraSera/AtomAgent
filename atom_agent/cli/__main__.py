@@ -254,6 +254,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  - {config.path}/AGENTS.md    (technical guidelines)")
         print(f"  - {config.path}/USER.md      (user preferences)")
         print(f"  - {config.path}/TOOLS.md     (tool usage guidelines)")
+        print(f"  - {config.path}/PROACTIVE.md (proactive task configuration)")
         print(f"  - {config.path}/memory/      (MEMORY.md, HISTORY.md)")
         print(f"  - {config.path}/sessions/    (conversation history)")
         return 0
