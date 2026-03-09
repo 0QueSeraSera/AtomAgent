@@ -1,6 +1,6 @@
 # Progress Tracking
 
-## Current Status: Feature Planning Active (Daemon + Proactive Messaging)
+## Current Status: Implementation Active (Daemon + Proactive Messaging)
 
 ## Scope
 
@@ -41,30 +41,70 @@ Feature: background daemon runtime with proactive message scheduling (randomized
   - `c110f67` docs(plan): rebuild daemon proactive implementation skeleton
   - `e5cbefb` docs(plan): add work packages and phase acceptance gates
 
+## Implementation Update (2026-03-09)
+
+- [x] Added workspace proactive template and bootstrap integration:
+  - `atom_agent/workspace/templates/PROACTIVE.md`
+  - workspace init now creates `PROACTIVE.md`
+- [x] Added proactive config parser/models package:
+  - `atom_agent/proactive/models.py`
+  - `atom_agent/proactive/parser.py`
+  - structured validation errors for CLI/daemon
+- [x] Added proactive CLI commands:
+  - `atom-agent proactive validate`
+  - `atom-agent proactive show`
+- [x] Added scheduler and persistent runtime state:
+  - `atom_agent/proactive/scheduler.py`
+  - `atom_agent/proactive/state.py`
+  - state persisted at `.proactive/state.json`
+- [x] Added daemon runtime and service:
+  - `atom_agent/daemon/runtime.py`
+  - `atom_agent/daemon/service.py`
+  - CLI: `atom-agent daemon run [--once] [--poll-sec N]`
+- [x] Added proactive brief injection into agent context:
+  - `## PROACTIVE.md (brief)` section in system prompt
+  - includes parse warnings when config is invalid
+- [x] Fixed CLI package entry-point exit-code propagation:
+  - `python -m atom_agent` now returns subcommand non-zero exit codes
+- [x] Added tests:
+  - parser: `tests/test_proactive_parser.py`
+  - CLI proactive: `tests/test_cli_proactive.py`
+  - scheduler/state: `tests/test_proactive_scheduler_state.py`
+  - daemon integration: `tests/test_daemon_service.py`
+  - context brief: `tests/test_context_proactive_brief.py`
+
+### Implementation Commits (Stepped)
+
+- `fb96906` feat(proactive): add PROACTIVE template and parser models
+- `d385d55` feat(cli): add proactive validate/show commands
+- `cbbdc50` feat(proactive): add scheduler and persistent runtime state
+- `92b52bf` feat(daemon): add daemon run --once and polling loop
+- `d84fe01` feat(agent): inject proactive brief into system context
+
 ## Next Implementation Steps
 
 ### Phase 1: Config + Validation
-- [ ] Add `PROACTIVE.md` template under `atom_agent/workspace/templates/`.
-- [ ] Include `PROACTIVE.md` in workspace initialization behavior.
-- [ ] Implement markdown+JSON parser for proactive task configuration.
-- [ ] Add validation command: `atom-agent proactive validate`.
-- [ ] Add inspection command: `atom-agent proactive show`.
+- [x] Add `PROACTIVE.md` template under `atom_agent/workspace/templates/`.
+- [x] Include `PROACTIVE.md` in workspace initialization behavior.
+- [x] Implement markdown+JSON parser for proactive task configuration.
+- [x] Add validation command: `atom-agent proactive validate`.
+- [x] Add inspection command: `atom-agent proactive show`.
 
 ### Phase 2: Daemon Core
-- [ ] Add daemon runtime module (`atom_agent/daemon/`).
-- [ ] Add one-cycle mode: `atom-agent daemon run --once`.
-- [ ] Add loop mode with polling interval.
-- [ ] Add workspace scanning across registered workspaces.
+- [x] Add daemon runtime module (`atom_agent/daemon/`).
+- [x] Add one-cycle mode: `atom-agent daemon run --once`.
+- [x] Add loop mode with polling interval.
+- [x] Add workspace scanning across registered workspaces.
 
 ### Phase 3: Scheduler + State
-- [ ] Implement task kinds: `once`, `cron`, `interval`.
-- [ ] Implement jitter support for random/lively behavior.
-- [ ] Persist per-task runtime state for restart safety.
+- [x] Implement task kinds: `once`, `cron`, `interval`.
+- [x] Implement jitter support for random/lively behavior.
+- [x] Persist per-task runtime state for restart safety.
 - [ ] Add duplicate-send protection and retry/cooldown policy.
 
 ### Phase 4: Verification
-- [ ] Unit tests: parser, schedule calculations, state persistence.
-- [ ] Integration tests: multi-workspace daemon cycle and dispatch.
+- [x] Unit tests: parser, schedule calculations, state persistence.
+- [x] Integration tests: multi-workspace daemon cycle and dispatch.
 - [ ] Real runtime verification with live provider and logs.
 - [ ] Manual verification of exact timestamp alarms and randomized proactive cadence.
 
