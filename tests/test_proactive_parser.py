@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from atom_agent.proactive import ProactiveValidationError, parse_proactive_file, parse_proactive_markdown
+from atom_agent.proactive import (
+    ProactiveValidationError,
+    parse_proactive_file,
+    parse_proactive_markdown,
+)
 
 
 def _wrap_json(json_payload: str) -> str:
