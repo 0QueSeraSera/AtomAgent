@@ -97,6 +97,69 @@ Workspace Registry -> PROACTIVE.md Load/Validate -> Scheduler Due Check
 3. Real provider verification with runtime logs.
 4. Validate restart behavior and duplicate-send prevention.
 
+## Detailed Work Packages
+
+### Work Package A: Workspace Template + CLI Surface
+
+1. Add `atom_agent/workspace/templates/PROACTIVE.md` with default disabled config.
+2. Update workspace init logic to always materialize template.
+3. Extend CLI command tree with `proactive validate` and `proactive show`.
+4. Ensure CLI output shows parse errors with task IDs and offending fields.
+
+### Work Package B: Proactive Config Parsing
+
+1. Implement JSON block extraction from markdown content.
+2. Enforce required schema for top-level and task-specific fields.
+3. Normalize defaults (`enabled=true`, timezone fallback) in parser output.
+4. Return machine-usable error objects for CLI and daemon logging.
+
+### Work Package C: Schedule Engine + Runtime State
+
+1. Build due-check API with `now` injection for deterministic tests.
+2. Persist per-task runtime fields (`next_run`, `last_run`, `last_status`, `last_error`).
+3. Implement jitter sampling per occurrence and persist effective timestamp.
+4. Guarantee atomic state writes to avoid corruption on interrupted process.
+
+### Work Package D: Daemon Service and Dispatch
+
+1. Implement one-cycle service entrypoint (`--once`) for integration tests.
+2. Implement poll loop with workspace reload on each cycle.
+3. Convert due task to normal `InboundMessage` against canonical `session_key`.
+4. Serialize task execution per task ID to prevent overlap.
+5. Log per-task lifecycle with structured fields for auditability.
+
+### Work Package E: Context and Behavior Consistency
+
+1. Inject compact proactive brief into context build path.
+2. Keep brief informational only; runtime state remains in `.proactive/state.json`.
+3. Ensure daemon uses same memory/session persistence files as interactive mode.
+
+## Acceptance Gates
+
+### Gate 1 (After Phase 1)
+
+1. New workspace contains `PROACTIVE.md`.
+2. `atom-agent proactive validate` exits non-zero on malformed config.
+3. `atom-agent proactive show` prints normalized task summary for valid config.
+
+### Gate 2 (After Phase 2)
+
+1. Scheduler test suite covers `once`, `cron`, `interval`, jitter, and restart cases.
+2. `.proactive/state.json` survives repeated daemon cycles without schema drift.
+3. Re-running schedule computation with same state does not duplicate `once` dispatch.
+
+### Gate 3 (After Phase 3)
+
+1. `atom-agent daemon run --once` dispatches only due enabled tasks.
+2. Invalid config in one workspace does not block other workspaces in same cycle.
+3. Two due tasks for different IDs can run independently; same ID is non-overlapping.
+
+### Gate 4 (After Phase 4)
+
+1. Real provider run confirms proactive output reaches target session.
+2. Restart test confirms no duplicate sends for completed `once` task.
+3. Runtime logs include enough fields to reconstruct task timeline.
+
 ## Contract Source
 
 Normative behavioral rules remain in [agent_docs/proactive-task-rules.md](./proactive-task-rules.md). This plan maps those rules into implementation tasks and milestones.
