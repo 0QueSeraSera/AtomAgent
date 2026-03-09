@@ -32,6 +32,15 @@ Feature: background daemon runtime with proactive message scheduling (randomized
   - `agent_docs/proactive-task-rules.md`
   - includes context-brief injection policy and agent edit authority for `PROACTIVE.md`
 
+## Planning Refresh Update (2026-03-09)
+
+- [x] Rebuilt `agent_docs/plan.md` with a tighter implementation-focused structure.
+- [x] Added file-level work packages and phase acceptance gates.
+- [x] Added explicit stepped commit sequence for implementation execution.
+- [x] Committed planning refresh in stepped commits:
+  - `c110f67` docs(plan): rebuild daemon proactive implementation skeleton
+  - `e5cbefb` docs(plan): add work packages and phase acceptance gates
+
 ## Next Implementation Steps
 
 ### Phase 1: Config + Validation

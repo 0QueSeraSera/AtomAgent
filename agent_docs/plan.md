@@ -160,6 +160,16 @@ Workspace Registry -> PROACTIVE.md Load/Validate -> Scheduler Due Check
 2. Restart test confirms no duplicate sends for completed `once` task.
 3. Runtime logs include enough fields to reconstruct task timeline.
 
+## Stepped Commit Sequence for Implementation
+
+1. `feat(proactive): add PROACTIVE workspace template and parser models`
+2. `feat(cli): add proactive validate/show commands`
+3. `feat(proactive): add scheduler and persistent runtime state`
+4. `feat(daemon): add daemon run --once and polling service loop`
+5. `feat(agent): route due proactive tasks through AgentLoop`
+6. `test(proactive): add parser/scheduler/state integration coverage`
+7. `docs: record runtime verification evidence and operational notes`
+
 ## Contract Source
 
 Normative behavioral rules remain in [agent_docs/proactive-task-rules.md](./proactive-task-rules.md). This plan maps those rules into implementation tasks and milestones.
