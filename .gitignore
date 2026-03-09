@@ -45,7 +45,7 @@ htmlcov/
 .pytype/
 
 # Project specific
-workspace/
+/workspace/
 *.log
 .env
 .env.local

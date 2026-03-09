@@ -5,6 +5,20 @@ Usage:
     python -m atom_agent [options]
     python -m atom_agent.cli [options]
 
+    # Workspace management
+    atom-agent init [path]           Initialize a new workspace
+    atom-agent identity show         Display current identity
+    atom-agent workspace validate    Check workspace health
+    atom-agent workspace list        List all workspaces with session counts
+    atom-agent workspace overview    Workspace/session overview table
+    atom-agent workspace switch <name> Switch active workspace
+    atom-agent workspace create <name> Create new workspace
+
+    # Session management
+    atom-agent session list          List sessions in current workspace
+    atom-agent session export <key>  Export session to file
+    atom-agent session import <file> Import session from file
+
 Configuration:
     Settings are loaded from .env file in the current directory (or parent dirs).
     Environment variables take precedence over .env file values.
@@ -12,7 +26,8 @@ Configuration:
     DEEPSEEK_API_KEY - API key for DeepSeek provider
     OPENAI_API_KEY   - API key for OpenAI provider (future use)
     ANTHROPIC_API_KEY - API key for Anthropic provider (future use)
-    ATOM_WORKSPACE   - Workspace directory (default: ./workspace)
+    ATOMAGENT_WORKSPACE - Workspace directory (active workspace by default)
+    ATOM_WORKSPACE   - Legacy workspace env var (still supported)
     ATOM_MODEL       - Model to use (default: provider default)
     ATOM_DEBUG       - Enable debug logging (1, true, yes)
 """
@@ -24,7 +39,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from atom_agent.config import Config
+from atom_agent.env_config import Config
 from atom_agent.logging import LoggingConfig, get_logger, setup_logging
 
 logger = get_logger("cli.main")
@@ -37,6 +52,9 @@ def parse_args() -> argparse.Namespace:
         description="Interactive CLI chat with AtomAgent",
     )
 
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Main chat command (default when no subcommand)
     parser.add_argument(
         "--provider",
         "-p",
@@ -57,7 +75,7 @@ def parse_args() -> argparse.Namespace:
         "-w",
         type=Path,
         default=None,
-        help="Workspace directory (default: ./workspace)",
+        help="Workspace directory (default: active workspace in ~/.atom-agents)",
     )
 
     parser.add_argument(
@@ -81,6 +99,118 @@ def parse_args() -> argparse.Namespace:
         help="Use JSON log format (for machine parsing)",
     )
 
+    # init subcommand
+    init_parser = subparsers.add_parser("init", help="Initialize a new workspace")
+    init_parser.add_argument(
+        "path",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Workspace path (default: active workspace in ~/.atom-agents)",
+    )
+    init_parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Overwrite existing files",
+    )
+    init_parser.add_argument(
+        "--name",
+        "-n",
+        default="default",
+        help="Name for the workspace",
+    )
+
+    # identity subcommand
+    identity_parser = subparsers.add_parser("identity", help="Manage agent identity")
+    identity_parser.add_argument(
+        "action",
+        choices=["show"],
+        help="Action to perform",
+    )
+    identity_parser.add_argument(
+        "--workspace",
+        "-w",
+        type=Path,
+        default=None,
+        help="Workspace directory",
+    )
+
+    # workspace subcommand
+    workspace_parser = subparsers.add_parser("workspace", help="Manage workspaces")
+    workspace_parser.add_argument(
+        "action",
+        choices=["validate", "list", "overview", "info", "switch", "create", "delete"],
+        help="Action to perform",
+    )
+    workspace_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="Workspace name (for switch/create/delete)",
+    )
+    workspace_parser.add_argument(
+        "--path",
+        "-p",
+        type=Path,
+        default=None,
+        help="Path for new workspace (for create)",
+    )
+    workspace_parser.add_argument(
+        "--delete-files",
+        action="store_true",
+        help="Also delete workspace files (for delete)",
+    )
+
+    # session subcommand
+    session_parser = subparsers.add_parser("session", help="Manage sessions")
+    session_parser.add_argument(
+        "action",
+        choices=["list", "export", "import", "delete"],
+        help="Action to perform",
+    )
+    session_parser.add_argument(
+        "key_or_path",
+        nargs="?",
+        default=None,
+        help="Session key (for export/delete) or file path (for import)",
+    )
+    session_parser.add_argument(
+        "--workspace",
+        "-w",
+        type=Path,
+        default=None,
+        help="Workspace directory",
+    )
+    session_parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Output file path (for export)",
+    )
+    session_parser.add_argument(
+        "--new-key",
+        type=str,
+        default=None,
+        help="New session key (for import)",
+    )
+
+    # tui subcommand
+    tui_parser = subparsers.add_parser("tui", help="Interactive workspace/session manager")
+    tui_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Print dashboard once and exit",
+    )
+    tui_parser.add_argument(
+        "--include-path",
+        type=Path,
+        action="append",
+        default=[],
+        help="Extra workspace path(s) to include in dashboard",
+    )
+
     return parser.parse_args()
 
 
@@ -98,10 +228,263 @@ def get_provider(name: str, config: Config):
     raise ValueError(f"Unknown provider: {name}")
 
 
+def _resolve_workspace_path(explicit: Path | None) -> Path:
+    """Resolve workspace path with global-registry defaults."""
+    if explicit:
+        return explicit.expanduser()
+
+    from atom_agent.config import ConfigManager
+
+    return ConfigManager().get_active_workspace_path().expanduser()
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Initialize a new workspace."""
+    from atom_agent.workspace import WorkspaceManager
+
+    path = _resolve_workspace_path(args.path)
+    manager = WorkspaceManager(path)
+
+    try:
+        config = manager.init_workspace(path, force=args.force, name=args.name)
+        print(f"✓ Workspace initialized at: {config.path}")
+        print("\nCreated files:")
+        print(f"  - {config.path}/IDENTITY.md  (agent identity)")
+        print(f"  - {config.path}/SOUL.md      (values and ethics)")
+        print(f"  - {config.path}/AGENTS.md    (technical guidelines)")
+        print(f"  - {config.path}/USER.md      (user preferences)")
+        print(f"  - {config.path}/TOOLS.md     (tool usage guidelines)")
+        print(f"  - {config.path}/memory/      (MEMORY.md, HISTORY.md)")
+        print(f"  - {config.path}/sessions/    (conversation history)")
+        return 0
+    except Exception as e:
+        print(f"Error: Failed to initialize workspace: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_identity(args: argparse.Namespace) -> int:
+    """Manage agent identity."""
+    from atom_agent.workspace import WorkspaceManager
+
+    if args.action == "show":
+        workspace = _resolve_workspace_path(args.workspace)
+        manager = WorkspaceManager(workspace)
+
+        if errors := manager.validate_workspace():
+            print(f"Error: Invalid workspace: {errors[0]}", file=sys.stderr)
+            return 1
+
+        identity = manager.get_identity()
+        print(f"=== Identity from {workspace}/IDENTITY.md ===\n")
+        print(identity)
+        return 0
+
+    return 1
+
+
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """Manage workspaces."""
+    from atom_agent.cli.management import collect_workspace_snapshots, format_workspace_overview
+    from atom_agent.config import ConfigManager, WorkspaceRegistry
+    from atom_agent.workspace import WorkspaceManager
+
+    if args.action == "validate":
+        path = Path(args.name) if args.name else _resolve_workspace_path(None)
+        manager = WorkspaceManager(path)
+
+        errors = manager.validate_workspace()
+        if errors:
+            print(f"✗ Workspace validation failed for {path}:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
+        else:
+            print(f"✓ Workspace is valid: {path}")
+            return 0
+
+    elif args.action == "info":
+        path = Path(args.name) if args.name else _resolve_workspace_path(None)
+        manager = WorkspaceManager(path)
+
+        errors = manager.validate_workspace()
+        print(f"Workspace: {path}")
+        print(f"Status: {'Valid' if not errors else 'Invalid'}")
+
+        if errors:
+            print("Errors:")
+            for error in errors:
+                print(f"  - {error}")
+
+        # Show bootstrap files status
+        print("\nBootstrap files:")
+        for filename in ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md"]:
+            file_path = path / filename
+            status = "✓" if file_path.exists() else "✗"
+            print(f"  {status} {filename}")
+
+        # Show sessions
+        sessions = manager.list_sessions()
+        print(f"\nSessions: {len(sessions)}")
+        for session in sessions[:5]:  # Show max 5
+            print(f"  - {session['key']}")
+
+        return 0 if not errors else 1
+
+    elif args.action in {"list", "overview"}:
+        config_manager = ConfigManager()
+        snapshots = collect_workspace_snapshots(config_manager)
+        print(format_workspace_overview(snapshots))
+        return 0
+
+    elif args.action == "switch":
+        if not args.name:
+            print("Error: Workspace name required", file=sys.stderr)
+            return 1
+
+        config_manager = ConfigManager()
+        if config_manager.set_active_workspace(args.name):
+            print(f"✓ Switched to workspace: {args.name}")
+            return 0
+        else:
+            print(f"Error: Workspace '{args.name}' not found", file=sys.stderr)
+            return 1
+
+    elif args.action == "create":
+        if not args.name:
+            print("Error: Workspace name required", file=sys.stderr)
+            return 1
+
+        registry = WorkspaceRegistry()
+        try:
+            entry = registry.create_workspace(args.name, args.path)
+            print(f"✓ Created workspace: {entry.name}")
+            print(f"  Path: {entry.path}")
+            return 0
+        except Exception as e:
+            print(f"Error: Failed to create workspace: {e}", file=sys.stderr)
+            return 1
+
+    elif args.action == "delete":
+        if not args.name:
+            print("Error: Workspace name required", file=sys.stderr)
+            return 1
+
+        registry = WorkspaceRegistry()
+        if registry.delete_workspace(args.name, delete_files=args.delete_files):
+            print(f"✓ Deleted workspace: {args.name}")
+            if args.delete_files:
+                print("  (files also deleted)")
+            return 0
+        else:
+            print(f"Error: Could not delete workspace '{args.name}'", file=sys.stderr)
+            return 1
+
+    return 1
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    """Manage sessions."""
+    from atom_agent.cli.management import ensure_workspace_initialized
+    from atom_agent.session.manager import SessionManager
+    workspace = _resolve_workspace_path(args.workspace)
+
+    initialized, errors = ensure_workspace_initialized(workspace, name=workspace.name)
+    if errors:
+        print(f"Error: Invalid workspace: {errors[0]}", file=sys.stderr)
+        return 1
+    if initialized:
+        print(f"ℹ Initialized workspace context files at: {workspace}")
+
+    session_manager = SessionManager(workspace, workspace.name)
+
+    if args.action == "list":
+        sessions = session_manager.list_sessions()
+        if not sessions:
+            print("No sessions found.")
+            return 0
+
+        print(f"Sessions in {workspace}:")
+        for session in sessions:
+            print(f"  - {session['key']}")
+            print(f"    Created: {session.get('created_at', 'unknown')}")
+            print(f"    Updated: {session.get('updated_at', 'unknown')}")
+            if session.get('workspace_name'):
+                print(f"    Workspace: {session['workspace_name']}")
+
+        return 0
+
+    elif args.action == "export":
+        if not args.key_or_path:
+            print("Error: Session key required", file=sys.stderr)
+            return 1
+
+        export_path = session_manager.export_session(args.key_or_path, args.output)
+        if export_path:
+            print(f"✓ Exported session '{args.key_or_path}' to: {export_path}")
+            return 0
+        else:
+            print(f"Error: Session '{args.key_or_path}' not found", file=sys.stderr)
+            return 1
+
+    elif args.action == "import":
+        if not args.key_or_path:
+            print("Error: Import file path required", file=sys.stderr)
+            return 1
+
+        import_path = Path(args.key_or_path)
+        if not import_path.exists():
+            print(f"Error: File not found: {import_path}", file=sys.stderr)
+            return 1
+
+        session = session_manager.import_session(import_path, args.new_key)
+        if session:
+            print(f"✓ Imported session: {session.key}")
+            print(f"  Messages: {len(session.messages)}")
+            return 0
+        else:
+            print(f"Error: Failed to import session from {import_path}", file=sys.stderr)
+            return 1
+
+    elif args.action == "delete":
+        if not args.key_or_path:
+            print("Error: Session key required", file=sys.stderr)
+            return 1
+
+        if session_manager.delete(args.key_or_path):
+            print(f"✓ Deleted session: {args.key_or_path}")
+            return 0
+        else:
+            print(f"Error: Session '{args.key_or_path}' not found", file=sys.stderr)
+            return 1
+
+    return 1
+
+
+def cmd_tui(args: argparse.Namespace) -> int:
+    """Launch workspace/session management TUI."""
+    from atom_agent.cli.management import WorkspaceSessionTUI
+
+    tui = WorkspaceSessionTUI(include_paths=args.include_path)
+    return tui.run(once=args.once)
+
+
 def main() -> int:
     """Main entry point."""
     args = parse_args()
 
+    # Handle subcommands
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "identity":
+        return cmd_identity(args)
+    elif args.command == "workspace":
+        return cmd_workspace(args)
+    elif args.command == "session":
+        return cmd_session(args)
+    elif args.command == "tui":
+        return cmd_tui(args)
+
+    # Default: run interactive chat
     # Load configuration from .env and environment
     config = Config.load(env_file=args.env_file)
 

@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from atom_agent import AgentLoop, MessageBus
 from atom_agent.bus.events import InboundMessage, OutboundMessage
+from atom_agent.config import ConfigManager
 from atom_agent.logging import get_logger
 
 if TYPE_CHECKING:
     from atom_agent.provider.base import LLMProvider
 
 logger = get_logger("cli.chat")
+
+
+def _default_workspace_path() -> Path:
+    """Resolve default workspace from global registry."""
+    return ConfigManager().get_active_workspace_path().expanduser()
 
 
 class AsyncCLIChat:
@@ -25,7 +32,7 @@ class AsyncCLIChat:
     - Real-time user input via async stdin
     - Progress updates during agent thinking
     - Graceful shutdown handling
-    - Session management with /new, /help, /exit commands
+    - UUID-based session management with /new, /sessions, /resume
     """
 
     def __init__(
@@ -37,10 +44,11 @@ class AsyncCLIChat:
         timeout: float = 120.0,
     ):
         self.provider = provider
-        self.workspace = workspace or Path("./workspace")
+        self.workspace = workspace or _default_workspace_path()
         self.model = model
         self.agent_name = agent_name
         self.timeout = timeout
+        self._current_chat_id = self._new_chat_id()
 
         self.bus = MessageBus()
         self.agent: AgentLoop | None = None
@@ -49,11 +57,22 @@ class AsyncCLIChat:
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._shutdown_event = asyncio.Event()
 
+    @staticmethod
+    def _new_chat_id() -> str:
+        """Create a UUID session id."""
+        return str(uuid.uuid4())
+
+    @property
+    def current_session_key(self) -> str:
+        """Return current CLI session key."""
+        return f"cli:{self._current_chat_id}"
+
     async def start(self) -> None:
         """Start the CLI chat session."""
         # Setup workspace
-        self.workspace.mkdir(exist_ok=True)
+        self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "memory").mkdir(exist_ok=True)
+        (self.workspace / "sessions").mkdir(exist_ok=True)
 
         # Create agent
         self.agent = AgentLoop(
@@ -93,13 +112,26 @@ class AsyncCLIChat:
         print("\n" + "=" * 60)
         print(f"  {self.agent_name} - Interactive CLI Chat")
         print("=" * 60)
-        print("\nCommands:")
-        print("  /help   - Show available commands")
-        print("  /new    - Start a new conversation")
-        print("  /exit   - Exit the chat")
-        print("  /stop   - Stop current task")
+        print(f"\nWorkspace: {self.workspace}")
+        print(f"Session:   {self._current_chat_id}")
         print("\nType your message and press Enter to chat.")
+        print("Type /help to see chat, session, and workspace commands.")
         print("=" * 60 + "\n")
+
+    def _print_help(self) -> None:
+        """Print local interface commands."""
+        print(
+            "\nCommands:\n"
+            "  /help                Show this help\n"
+            "  /new                 Start a new UUID session\n"
+            "  /sessions            List sessions in current workspace\n"
+            "  /resume <uuid|key>   Resume a previous session\n"
+            "  /workspace           Show current workspace details\n"
+            "  /dashboard           Show workspace/session dashboard\n"
+            "  /use <workspace>     Switch to a registered workspace\n"
+            "  /stop                Stop current task (agent command)\n"
+            "  /exit                Exit the chat\n"
+        )
 
     async def _run_chat_loop(self) -> None:
         """Main chat loop handling input and output."""
@@ -134,11 +166,9 @@ class AsyncCLIChat:
                 if not user_input:
                     continue
 
-                # Handle exit command
-                if user_input.lower() == "/exit":
-                    print("\nGoodbye!")
-                    self._shutdown_event.set()
-                    break
+                # Handle local interface commands before sending to agent
+                if user_input.startswith("/") and await self._handle_local_command(user_input):
+                    continue
 
                 # Send message to agent
                 await self._send_message(user_input)
@@ -148,6 +178,138 @@ class AsyncCLIChat:
             except Exception as e:
                 logger.error(f"Input error: {e}")
                 await asyncio.sleep(0.1)
+
+    async def _handle_local_command(self, raw: str) -> bool:
+        """Handle shell-like local commands; return True if handled."""
+        tokens = raw.strip().split()
+        if not tokens:
+            return True
+
+        cmd = tokens[0].lower()
+
+        if cmd == "/exit":
+            print("\nGoodbye!")
+            self._shutdown_event.set()
+            return True
+
+        if cmd == "/help":
+            self._print_help()
+            return True
+
+        if cmd == "/new":
+            self._current_chat_id = self._new_chat_id()
+            print(f"Started new session: {self._current_chat_id}")
+            return True
+
+        if cmd == "/sessions":
+            self._print_sessions()
+            return True
+
+        if cmd == "/resume":
+            if len(tokens) < 2:
+                print("Usage: /resume <uuid|key>")
+                return True
+            self._resume_session(tokens[1])
+            return True
+
+        if cmd in {"/dashboard", "/workspaces"}:
+            self._print_dashboard()
+            return True
+
+        if cmd == "/workspace":
+            self._print_workspace_info()
+            return True
+
+        if cmd == "/use":
+            if len(tokens) < 2:
+                print("Usage: /use <workspace-name>")
+                return True
+            await self._switch_workspace(tokens[1])
+            return True
+
+        return False
+
+    def _print_sessions(self) -> None:
+        """List known sessions in current workspace."""
+        if self.agent is None:
+            print("Session manager not ready yet.")
+            return
+
+        sessions = self.agent.sessions.list_sessions()
+        if not sessions:
+            print("No sessions found in this workspace.")
+            return
+
+        print("\nSessions:")
+        for session in sessions:
+            key = session.get("key", "")
+            marker = "*" if key == self.current_session_key else " "
+            sid = key.split(":", 1)[1] if ":" in key else key
+            updated = session.get("updated_at", "unknown")
+            print(f" {marker} {sid}  ({updated})")
+        print(" * = current session")
+
+    def _resume_session(self, session_id_or_key: str) -> None:
+        """Resume an existing session by uuid or full key."""
+        if self.agent is None:
+            print("Session manager not ready yet.")
+            return
+
+        normalized = (
+            session_id_or_key
+            if ":" in session_id_or_key
+            else f"cli:{session_id_or_key}"
+        )
+        known_keys = {s.get("key", "") for s in self.agent.sessions.list_sessions()}
+        if normalized not in known_keys:
+            print(f"Session not found: {session_id_or_key}")
+            return
+
+        self._current_chat_id = normalized.split(":", 1)[1] if ":" in normalized else normalized
+        print(f"Resumed session: {self._current_chat_id}")
+
+    def _print_dashboard(self) -> None:
+        """Show workspace/session dashboard from inside chat."""
+        from atom_agent.cli.management import collect_workspace_snapshots, format_workspace_overview
+
+        snapshots = collect_workspace_snapshots(
+            ConfigManager(),
+            include_paths=[self.workspace],
+        )
+        print()
+        print(format_workspace_overview(snapshots))
+
+    def _print_workspace_info(self) -> None:
+        """Show current workspace and session info."""
+        print(
+            f"Workspace: {self.workspace}\n"
+            f"Session:   {self._current_chat_id}\n"
+            f"Key:       {self.current_session_key}"
+        )
+
+    async def _switch_workspace(self, name: str) -> None:
+        """Switch active workspace and agent context."""
+        if self.agent is None:
+            print("Agent is not ready.")
+            return
+
+        config = ConfigManager()
+        entry = config.config.workspaces.get(name)
+        if not entry:
+            print(f"Workspace not found: {name}")
+            return
+        if not config.set_active_workspace(name):
+            print(f"Failed to set active workspace: {name}")
+            return
+
+        if not await self.agent.switch_workspace(entry.path, name):
+            print(f"Agent failed to switch to workspace: {name}")
+            return
+
+        self.workspace = entry.path
+        self._current_chat_id = self._new_chat_id()
+        print(f"Switched to workspace '{name}' at {entry.path}")
+        print(f"Started new session: {self._current_chat_id}")
 
     def _prompt_input(self) -> str | None:
         """Blocking input prompt (called in thread)."""
@@ -161,7 +323,7 @@ class AsyncCLIChat:
         msg = InboundMessage(
             channel="cli",
             sender_id="user",
-            chat_id="interactive",
+            chat_id=self._current_chat_id,
             content=content,
         )
         await self.bus.publish_inbound(msg)
@@ -191,16 +353,17 @@ class AsyncCLIChat:
     def _display_response(self, response: OutboundMessage) -> None:
         """Format and display agent response."""
         metadata = response.metadata or {}
+        session_tag = response.chat_id
 
         # Handle progress updates
         if metadata.get("_progress"):
             prefix = "  " if metadata.get("_tool_hint") else "[Thinking]: "
-            print(f"{prefix}{response.content}")
+            print(f"{prefix}[{session_tag}] {response.content}")
             return
 
         # Regular response
         if response.content:
-            print(f"[{self.agent_name}]: {response.content}")
+            print(f"[{self.agent_name}:{session_tag}] {response.content}")
 
     async def _cleanup(self) -> None:
         """Cleanup resources."""

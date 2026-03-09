@@ -22,6 +22,16 @@ except ImportError:
     DOTENV_AVAILABLE = False
 
 
+def _default_workspace_path() -> Path:
+    """Resolve default workspace from global registry."""
+    try:
+        from atom_agent.config import ConfigManager
+
+        return ConfigManager().get_active_workspace_path()
+    except Exception:
+        return Path.home() / ".atom-agents" / "workspaces" / "default"
+
+
 @dataclass
 class Config:
     """
@@ -44,7 +54,7 @@ class Config:
     anthropic_api_key: str | None = None
 
     # General settings
-    workspace: Path = field(default_factory=lambda: Path("./workspace"))
+    workspace: Path = field(default_factory=_default_workspace_path)
     model: str | None = None
     debug: bool = False
 
@@ -76,11 +86,12 @@ class Config:
             logger.debug("python-dotenv not available, skipping .env file")
 
         # Read from environment variables
+        workspace_env = os.environ.get("ATOMAGENT_WORKSPACE") or os.environ.get("ATOM_WORKSPACE")
         config = cls(
             deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY"),
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            workspace=Path(os.environ.get("ATOM_WORKSPACE", "./workspace")),
+            workspace=Path(workspace_env) if workspace_env else _default_workspace_path(),
             model=os.environ.get("ATOM_MODEL"),
             debug=os.environ.get("ATOM_DEBUG", "").lower() in ("1", "true", "yes"),
         )
