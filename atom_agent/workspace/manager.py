@@ -19,6 +19,19 @@ BOOTSTRAP_FILES = ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md"]
 # Required directories in a workspace
 WORKSPACE_DIRS = ["memory", "sessions"]
 
+DEFAULT_MEMORY_CONTENT = "# Long-term Memory\n\n- No persistent facts recorded yet.\n"
+DEFAULT_HISTORY_CONTENT = "# Conversation History\n\n- No archived sessions yet.\n"
+
+
+def _default_workspace_path() -> Path:
+    """Resolve default workspace from global registry."""
+    try:
+        from atom_agent.config import ConfigManager
+
+        return ConfigManager().get_active_workspace_path()
+    except Exception:
+        return Path.home() / ".atom-agents" / "workspaces" / "default"
+
 
 @dataclass
 class WorkspaceConfig:
@@ -63,7 +76,7 @@ class WorkspaceManager:
 
     def __init__(self, workspace_path: Path | None = None):
         """Initialize workspace manager."""
-        self.workspace_path = workspace_path or Path("./workspace")
+        self.workspace_path = workspace_path or _default_workspace_path()
         self._templates_dir = Path(__file__).parent / "templates"
 
     @property
@@ -108,11 +121,13 @@ class WorkspaceManager:
         for filename in BOOTSTRAP_FILES:
             self._init_file(target_path / filename, force=force)
 
-        # Create empty memory files if they don't exist
+        # Create memory files with starter content
         memory_file = target_path / "memory" / "MEMORY.md"
         history_file = target_path / "memory" / "HISTORY.md"
-        memory_file.touch(exist_ok=True)
-        history_file.touch(exist_ok=True)
+        if force or not memory_file.exists():
+            memory_file.write_text(DEFAULT_MEMORY_CONTENT, encoding="utf-8")
+        if force or not history_file.exists():
+            history_file.write_text(DEFAULT_HISTORY_CONTENT, encoding="utf-8")
 
         config = WorkspaceConfig(
             path=target_path,

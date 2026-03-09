@@ -22,6 +22,9 @@ dependencies = [
     "httpx>=0.25.0",
 ]
 
+[project.scripts]
+atom-agent = "atom_agent.cli.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",

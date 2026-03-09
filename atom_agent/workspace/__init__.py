@@ -19,8 +19,6 @@ Example:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from atom_agent.workspace.manager import (
     BOOTSTRAP_FILES,
     WORKSPACE_DIRS,

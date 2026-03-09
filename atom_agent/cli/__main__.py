@@ -9,7 +9,8 @@ Usage:
     atom-agent init [path]           Initialize a new workspace
     atom-agent identity show         Display current identity
     atom-agent workspace validate    Check workspace health
-    atom-agent workspace list        List all registered workspaces
+    atom-agent workspace list        List all workspaces with session counts
+    atom-agent workspace overview    Workspace/session overview table
     atom-agent workspace switch <name> Switch active workspace
     atom-agent workspace create <name> Create new workspace
 
@@ -25,7 +26,8 @@ Configuration:
     DEEPSEEK_API_KEY - API key for DeepSeek provider
     OPENAI_API_KEY   - API key for OpenAI provider (future use)
     ANTHROPIC_API_KEY - API key for Anthropic provider (future use)
-    ATOM_WORKSPACE   - Workspace directory (default: ./workspace)
+    ATOMAGENT_WORKSPACE - Workspace directory (active workspace by default)
+    ATOM_WORKSPACE   - Legacy workspace env var (still supported)
     ATOM_MODEL       - Model to use (default: provider default)
     ATOM_DEBUG       - Enable debug logging (1, true, yes)
 """
@@ -73,7 +75,7 @@ def parse_args() -> argparse.Namespace:
         "-w",
         type=Path,
         default=None,
-        help="Workspace directory (default: ./workspace)",
+        help="Workspace directory (default: active workspace in ~/.atom-agents)",
     )
 
     parser.add_argument(
@@ -104,7 +106,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         nargs="?",
         default=None,
-        help="Workspace path (default: ./workspace)",
+        help="Workspace path (default: active workspace in ~/.atom-agents)",
     )
     init_parser.add_argument(
         "--force",
@@ -138,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     workspace_parser = subparsers.add_parser("workspace", help="Manage workspaces")
     workspace_parser.add_argument(
         "action",
-        choices=["validate", "list", "info", "switch", "create", "delete"],
+        choices=["validate", "list", "overview", "info", "switch", "create", "delete"],
         help="Action to perform",
     )
     workspace_parser.add_argument(
@@ -194,6 +196,21 @@ def parse_args() -> argparse.Namespace:
         help="New session key (for import)",
     )
 
+    # tui subcommand
+    tui_parser = subparsers.add_parser("tui", help="Interactive workspace/session manager")
+    tui_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Print dashboard once and exit",
+    )
+    tui_parser.add_argument(
+        "--include-path",
+        type=Path,
+        action="append",
+        default=[],
+        help="Extra workspace path(s) to include in dashboard",
+    )
+
     return parser.parse_args()
 
 
@@ -211,11 +228,21 @@ def get_provider(name: str, config: Config):
     raise ValueError(f"Unknown provider: {name}")
 
 
+def _resolve_workspace_path(explicit: Path | None) -> Path:
+    """Resolve workspace path with global-registry defaults."""
+    if explicit:
+        return explicit.expanduser()
+
+    from atom_agent.config import ConfigManager
+
+    return ConfigManager().get_active_workspace_path().expanduser()
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Initialize a new workspace."""
     from atom_agent.workspace import WorkspaceManager
 
-    path = args.path or Path("./workspace")
+    path = _resolve_workspace_path(args.path)
     manager = WorkspaceManager(path)
 
     try:
@@ -240,7 +267,7 @@ def cmd_identity(args: argparse.Namespace) -> int:
     from atom_agent.workspace import WorkspaceManager
 
     if args.action == "show":
-        workspace = args.workspace or Path("./workspace")
+        workspace = _resolve_workspace_path(args.workspace)
         manager = WorkspaceManager(workspace)
 
         if errors := manager.validate_workspace():
@@ -257,11 +284,12 @@ def cmd_identity(args: argparse.Namespace) -> int:
 
 def cmd_workspace(args: argparse.Namespace) -> int:
     """Manage workspaces."""
+    from atom_agent.cli.management import collect_workspace_snapshots, format_workspace_overview
     from atom_agent.config import ConfigManager, WorkspaceRegistry
     from atom_agent.workspace import WorkspaceManager
 
     if args.action == "validate":
-        path = Path(args.name) if args.name else Path("./workspace")
+        path = Path(args.name) if args.name else _resolve_workspace_path(None)
         manager = WorkspaceManager(path)
 
         errors = manager.validate_workspace()
@@ -275,7 +303,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
             return 0
 
     elif args.action == "info":
-        path = Path(args.name) if args.name else Path("./workspace")
+        path = Path(args.name) if args.name else _resolve_workspace_path(None)
         manager = WorkspaceManager(path)
 
         errors = manager.validate_workspace()
@@ -302,27 +330,10 @@ def cmd_workspace(args: argparse.Namespace) -> int:
 
         return 0 if not errors else 1
 
-    elif args.action == "list":
-        # List all registered workspaces
+    elif args.action in {"list", "overview"}:
         config_manager = ConfigManager()
-        workspaces = config_manager.list_workspaces()
-        active = config_manager.config.active_workspace
-
-        if not workspaces:
-            print("No workspaces registered.")
-            print("\nTo create a workspace, run:")
-            print("  atom-agent workspace create <name>")
-            return 0
-
-        print("Registered workspaces:")
-        for ws in workspaces:
-            marker = " *" if ws.name == active else ""
-            print(f"  - {ws.name}{marker}")
-            print(f"    Path: {ws.path}")
-            if ws.created_at:
-                print(f"    Created: {ws.created_at.strftime('%Y-%m-%d %H:%M')}")
-
-        print(f"\n * = active workspace")
+        snapshots = collect_workspace_snapshots(config_manager)
+        print(format_workspace_overview(snapshots))
         return 0
 
     elif args.action == "switch":
@@ -373,16 +384,16 @@ def cmd_workspace(args: argparse.Namespace) -> int:
 
 def cmd_session(args: argparse.Namespace) -> int:
     """Manage sessions."""
+    from atom_agent.cli.management import ensure_workspace_initialized
     from atom_agent.session.manager import SessionManager
-    from atom_agent.workspace import WorkspaceManager
+    workspace = _resolve_workspace_path(args.workspace)
 
-    workspace = args.workspace or Path("./workspace")
-    manager = WorkspaceManager(workspace)
-
-    # Validate workspace
-    if errors := manager.validate_workspace():
+    initialized, errors = ensure_workspace_initialized(workspace, name=workspace.name)
+    if errors:
         print(f"Error: Invalid workspace: {errors[0]}", file=sys.stderr)
         return 1
+    if initialized:
+        print(f"ℹ Initialized workspace context files at: {workspace}")
 
     session_manager = SessionManager(workspace, workspace.name)
 
@@ -449,6 +460,14 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    """Launch workspace/session management TUI."""
+    from atom_agent.cli.management import WorkspaceSessionTUI
+
+    tui = WorkspaceSessionTUI(include_paths=args.include_path)
+    return tui.run(once=args.once)
+
+
 def main() -> int:
     """Main entry point."""
     args = parse_args()
@@ -462,6 +481,8 @@ def main() -> int:
         return cmd_workspace(args)
     elif args.command == "session":
         return cmd_session(args)
+    elif args.command == "tui":
+        return cmd_tui(args)
 
     # Default: run interactive chat
     # Load configuration from .env and environment

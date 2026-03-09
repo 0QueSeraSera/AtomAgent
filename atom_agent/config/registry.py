@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -19,9 +20,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Default AtomAgent directory
-DEFAULT_ATOMAGENT_DIR = Path.home() / ".atomagent"
+DEFAULT_ATOMAGENT_DIR = Path.home() / ".atom-agents"
 DEFAULT_WORKSPACES_DIR = DEFAULT_ATOMAGENT_DIR / "workspaces"
 DEFAULT_CONFIG_FILE = DEFAULT_ATOMAGENT_DIR / "config.json"
+LEGACY_ATOMAGENT_DIRS = (
+    Path.home() / ".atomagent",
+    Path.home() / ".atom-agent",
+)
 
 
 @dataclass
@@ -99,12 +104,79 @@ class ConfigManager:
     """
     Manages global AtomAgent configuration.
 
-    Configuration is stored in ~/.atomagent/config.json by default.
+    Configuration is stored in ~/.atom-agents/config.json by default.
     """
 
     def __init__(self, config_file: Path | None = None):
+        if config_file is None:
+            self._migrate_legacy_home()
         self.config_file = config_file or DEFAULT_CONFIG_FILE
         self._config: GlobalConfig | None = None
+
+    @staticmethod
+    def _migrate_legacy_home() -> None:
+        """Copy legacy ~/.atomagent* home into ~/.atom-agents once."""
+        if DEFAULT_ATOMAGENT_DIR.exists():
+            return
+
+        for legacy_dir in LEGACY_ATOMAGENT_DIRS:
+            if not legacy_dir.exists():
+                continue
+            try:
+                shutil.copytree(legacy_dir, DEFAULT_ATOMAGENT_DIR, dirs_exist_ok=True)
+                logger.info(
+                    "Migrated legacy AtomAgent home",
+                    extra={"from": str(legacy_dir), "to": str(DEFAULT_ATOMAGENT_DIR)},
+                )
+                return
+            except Exception as e:
+                logger.debug(
+                    "Failed to migrate legacy AtomAgent home",
+                    extra={"from": str(legacy_dir), "error": str(e)},
+                )
+
+    @staticmethod
+    def _normalize_workspace_paths(config: GlobalConfig) -> bool:
+        """Repoint legacy ~/.atomagent* workspace paths to ~/.atom-agents."""
+        changed = False
+        for entry in config.workspaces.values():
+            path = entry.path.expanduser()
+            for legacy_dir in LEGACY_ATOMAGENT_DIRS:
+                legacy = legacy_dir.expanduser()
+                try:
+                    rel = path.resolve(strict=False).relative_to(legacy.resolve(strict=False))
+                except ValueError:
+                    continue
+
+                entry.path = DEFAULT_ATOMAGENT_DIR / rel
+                changed = True
+                break
+        return changed
+
+    @staticmethod
+    def _ensure_default_workspace(config: GlobalConfig) -> bool:
+        """Ensure the default workspace entry exists and is initialized."""
+        changed = False
+        entry = config.workspaces.get("default")
+        if entry is None:
+            entry = WorkspaceEntry(
+                name="default",
+                path=DEFAULT_WORKSPACES_DIR / "default",
+                created_at=datetime.now(),
+            )
+            config.workspaces["default"] = entry
+            changed = True
+
+        try:
+            from atom_agent.workspace import WorkspaceManager
+
+            manager = WorkspaceManager(entry.path)
+            if manager.validate_workspace(entry.path):
+                manager.init_workspace(entry.path, force=False, name="default")
+        except Exception as e:
+            logger.debug("Failed to initialize default workspace", extra={"error": str(e)})
+
+        return changed
 
     @property
     def config(self) -> GlobalConfig:
@@ -122,7 +194,13 @@ class ConfigManager:
         try:
             with open(self.config_file, encoding="utf-8") as f:
                 data = json.load(f)
-            return GlobalConfig.from_dict(data)
+            config = GlobalConfig.from_dict(data)
+            normalized = self._normalize_workspace_paths(config)
+            default_added = self._ensure_default_workspace(config)
+            if normalized or default_added:
+                self._config = config
+                self.save()
+            return config
         except Exception as e:
             logger.warning(f"Failed to load config: {e}, using defaults")
             return self._create_default_config()
@@ -139,18 +217,27 @@ class ConfigManager:
 
     def _create_default_config(self) -> GlobalConfig:
         """Create default configuration with default workspace."""
+        default_path = DEFAULT_WORKSPACES_DIR / "default"
         config = GlobalConfig(
             active_workspace="default",
             default_provider="deepseek",
             workspaces={
                 "default": WorkspaceEntry(
                     name="default",
-                    path=DEFAULT_WORKSPACES_DIR / "default",
+                    path=default_path,
                     created_at=datetime.now(),
                 )
             },
             created_at=datetime.now(),
         )
+
+        try:
+            from atom_agent.workspace import WorkspaceManager
+
+            WorkspaceManager(default_path).init_workspace(name="default")
+        except Exception as e:
+            logger.debug("Failed to initialize default workspace", extra={"error": str(e)})
+
         self._config = config
         return config
 
@@ -249,7 +336,7 @@ class WorkspaceRegistry:
 
         Args:
             name: Name for the workspace
-            path: Optional path (defaults to ~/.atomagent/workspaces/{name})
+            path: Optional path (defaults to ~/.atom-agents/workspaces/{name})
             template: Optional template name for initialization
 
         Returns:
