@@ -68,6 +68,11 @@ def test_proactive_show_prints_task_summary(tmp_path: Path) -> None:
                   "cron": "0 10 * * *",
                   "jitter_sec": 900,
                   "session_key": "telegram:123456",
+                  "target": {
+                    "channel": "feishu",
+                    "chat_id": "oc_demo",
+                    "thread_id": "thread-1"
+                  },
                   "prompt": "Send a short check-in."
                 }
               ]
@@ -84,6 +89,8 @@ def test_proactive_show_prints_task_summary(tmp_path: Path) -> None:
     assert "wake-up [once]" in result.stdout
     assert "daily-checkin [cron]" in result.stdout
     assert "session_key: telegram:123456" in result.stdout
+    assert "target: feishu:oc_demo" in result.stdout
+    assert "target.thread_id: thread-1" in result.stdout
 
 
 def test_proactive_validate_shows_structured_errors(tmp_path: Path) -> None:

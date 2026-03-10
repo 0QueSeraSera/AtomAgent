@@ -552,6 +552,12 @@ def cmd_proactive(args: argparse.Namespace) -> int:
             jitter = f", jitter={task.jitter_sec}s" if task.jitter_sec else ""
             print(f"- {task.task_id} [{task.kind}] ({status})")
             print(f"  session_key: {task.session_key}")
+            if task.target:
+                print(f"  target: {task.target.channel}:{task.target.chat_id}")
+                if task.target.reply_to:
+                    print(f"  target.reply_to: {task.target.reply_to}")
+                if task.target.thread_id:
+                    print(f"  target.thread_id: {task.target.thread_id}")
             print(f"  schedule: {schedule}{jitter}")
         return 0
 
