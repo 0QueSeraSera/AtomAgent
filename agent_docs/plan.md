@@ -1,289 +1,175 @@
-# File-Based Context Management Plan
+# Daemon Proactive Messaging Implementation Plan
 
-## Overview
+## Objective
 
-This plan outlines the implementation of a file-based context system for AtomAgent, enabling agents to have evolving identities, memories, and behaviors through editable workspace files. The implementation is divided into two major milestones.
+Implement a workspace-driven daemon mode so AtomAgent can proactively send messages without an interactive CLI session.
 
-## Current State Analysis
+This plan turns `PROACTIVE.md` into executable behavior while reusing existing `AgentLoop`, session storage, memory, and workspace context files.
 
-### AtomAgent (Current)
-- **Context**: Hardcoded in `ContextBuilder._get_identity()` - agent name, guidelines are embedded in code
-- **Memory**: Already has `MemoryStore` with `memory/MEMORY.md` and `memory/HISTORY.md`
-- **Sessions**: Stored in `workspace/sessions/*.jsonl` - global to workspace
-- **Bootstrap Files**: Already loads `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md` from workspace
+## Definition of Done
 
-### Nanobot (Reference)
-- **Context**: File-based with workspace loading `BOOTSTRAP_FILES`
-- **Skills**: `workspace/skills/{skill-name}/SKILL.md` for extendable capabilities
-- **Sessions**: Stored per-workspace at `workspace/sessions/`
-- **Memory**: Same two-layer approach (MEMORY.md + HISTORY.md)
+1. `PROACTIVE.md` is included in workspace initialization and can be validated from CLI.
+2. A daemon command scans registered workspaces and schedules proactive tasks.
+3. Supported task kinds in v1: `once`, `cron`, `interval` with delay-only jitter.
+4. Task runtime state is persisted and restart-safe (no duplicate once sends).
+5. Dispatched proactive runs use the same context + session pipeline as interactive chat.
+6. End-to-end run is verified using a real provider and runtime logs.
 
-### Key Differences
-1. AtomAgent lacks a formal skills system
-2. AtomAgent's identity is partially hardcoded vs. fully file-based
-3. Session management is tied to workspace but identity files are workspace-global
+## Scope
 
-## Proposed Architecture
+### In Scope
 
-### Milestone 1: File-Based Context System
+1. Parser + validation for markdown file with machine-readable JSON block.
+2. Scheduling engine for due-time computation and jitter handling.
+3. Daemon service loop with workspace scanning and task dispatch.
+4. CLI commands for daemon run and proactive config inspection.
+5. Runtime state persistence under workspace-local `.proactive/`.
 
-Goal: Make agent identity fully configurable through workspace files.
+### Out of Scope (v1)
 
-#### Workspace Structure
-```
-workspace/
-├── IDENTITY.md          # Core identity (name, description, personality)
-├── SOUL.md              # Values, ethics, behavioral guidelines
-├── AGENTS.md            # Technical guidelines for coding/operation
-├── USER.md              # User preferences and context
-├── TOOLS.md             # Tool usage guidelines
-├── memory/
-│   ├── MEMORY.md        # Long-term facts (LLM-curated)
-│   └── HISTORY.md       # Grep-searchable activity log
-└── sessions/            # Session histories
-    └── *.jsonl
-```
+1. Distributed scheduling across multiple hosts.
+2. External coordinator/queue dependencies.
+3. Channel-specific delivery plugins beyond existing session routing path.
 
-#### Changes Required
+## Existing Baseline
 
-1. **ContextBuilder Refactoring** (`atom_agent/agent/context.py`)
-   - Remove hardcoded identity from `_get_identity()`
-   - Make identity fully derived from `IDENTITY.md`
-   - Add fallback template when IDENTITY.md doesn't exist
-   - Support runtime metadata injection (time, platform) separately
+Relevant modules already present in repository:
 
-2. **Workspace Initialization** (`atom_agent/workspace/`)
-   - New module for workspace management
-   - `WorkspaceManager` class:
-     - `init_workspace(path)`: Create default files if missing
-     - `validate_workspace(path)`: Check required files exist
-     - `get_workspace_config(path)`: Load workspace settings
-   - Default template files in `atom_agent/workspace/templates/`
+1. `atom_agent/agent/loop.py` for message processing lifecycle.
+2. `atom_agent/bus/events.py` and `atom_agent/bus/queue.py` for inbound/outbound events.
+3. `atom_agent/session/manager.py` for session persistence.
+4. `atom_agent/workspace/manager.py` and workspace template system.
+5. `atom_agent/cli/__main__.py` and CLI command groups.
 
-3. **Identity Evolution Support**
-   - Agent can modify its own `IDENTITY.md` through file tools
-   - Memory consolidation can suggest identity updates
-   - Track identity changes in HISTORY.md
+## Architecture Direction
 
-4. **CLI Commands** (new in `atom_agent/cli/`)
-   - `atom-agent init [path]`: Initialize a new workspace
-   - `atom-agent identity show`: Display current identity
-   - `atom-agent workspace validate`: Check workspace health
+### Control Flow
 
-#### Implementation Steps
-
-1. Create `atom_agent/workspace/__init__.py`
-2. Create `atom_agent/workspace/manager.py` with `WorkspaceManager`
-3. Create `atom_agent/workspace/templates/` with default files
-4. Refactor `ContextBuilder` to use file-based identity
-5. Add CLI commands for workspace management
-6. Add tests for workspace initialization
-7. Update documentation
-
-### Milestone 2: Session & Workspace Management
-
-Goal: Link sessions to agent identity, support multiple workspaces and session switching.
-
-#### Enhanced Workspace Structure
-```
-~/.atomagent/
-├── workspaces/
-│   ├── default/
-│   │   ├── IDENTITY.md
-│   │   ├── SOUL.md
-│   │   ├── memory/
-│   │   │   ├── MEMORY.md
-│   │   │   └── HISTORY.md
-│   │   └── sessions/
-│   │       ├── cli_direct.jsonl
-│   │       └── telegram_12345.jsonl
-│   ├── work-assistant/
-│   │   ├── IDENTITY.md (work-focused)
-│   │   └── sessions/
-│   └── personal-assistant/
-│       ├── IDENTITY.md (personal-focused)
-│       └── sessions/
-├── config.yaml           # Global configuration
-└── current_workspace -> workspaces/default/  # Symlink or config
+```text
+Workspace Registry -> PROACTIVE.md Load/Validate -> Scheduler Due Check
+-> Daemon Dispatch -> AgentLoop Run -> Outbound Message -> State Persist
 ```
 
-#### Changes Required
+### New Modules
 
-1. **Workspace Registry** (`atom_agent/workspace/registry.py`)
-   - `WorkspaceRegistry` class:
-     - `list_workspaces()`: List all known workspaces
-     - `get_workspace(name)`: Get workspace by name
-     - `create_workspace(name, template)`: Create new workspace
-     - `delete_workspace(name)`: Remove workspace
-     - `get_active_workspace()`: Get current active workspace
-     - `set_active_workspace(name)`: Switch active workspace
+1. `atom_agent/proactive/models.py`
+   - Typed structures for config + tasks + runtime metadata.
+2. `atom_agent/proactive/parser.py`
+   - Parse markdown/JSON block and return normalized config.
+3. `atom_agent/proactive/scheduler.py`
+   - Compute eligibility and next fire times for `once`/`cron`/`interval`.
+4. `atom_agent/proactive/state.py`
+   - Load/save `.proactive/state.json` with atomic writes.
+5. `atom_agent/daemon/service.py`
+   - Long-running poll loop and workspace orchestration.
+6. `atom_agent/daemon/runtime.py`
+   - Workspace runtime wrapper around shared `AgentLoop` execution path.
 
-2. **Session Management Refactoring** (`atom_agent/session/manager.py`)
-   - Sessions belong to specific workspaces
-   - `SessionManager` takes workspace path, not arbitrary path
-   - Support session metadata for workspace association
-   - Add session import/export between workspaces
+## Implementation Phases
 
-3. **AgentLoop Updates** (`atom_agent/agent/loop.py`)
-   - Support workspace switching at runtime
-   - Maintain session continuity across workspace switches
-   - Handle workspace-specific tool configurations
+### Phase 1: Config Surface and Validation
 
-4. **Configuration System** (`atom_agent/config/`)
-   - New config module for global settings
-   - `config.yaml` schema:
-     ```yaml
-     active_workspace: default
-     default_provider: anthropic
-     workspaces:
-       default:
-         path: ~/.atomagent/workspaces/default
-       work-assistant:
-         path: ~/.atomagent/workspaces/work-assistant
-     ```
-   - Environment variable overrides (`ATOMAGENT_WORKSPACE`, etc.)
+1. Add `PROACTIVE.md` template to workspace templates.
+2. Ensure workspace init creates default-safe file.
+3. Implement parser and strict validation errors.
+4. Add CLI: `atom-agent proactive validate`.
+5. Add CLI: `atom-agent proactive show`.
 
-5. **CLI Commands** (extended)
-   - `atom-agent workspace list`: List all workspaces
-   - `atom-agent workspace switch <name>`: Switch active workspace
-   - `atom-agent workspace create <name>`: Create new workspace
-   - `atom-agent session list`: List sessions in current workspace
-   - `atom-agent session export <key>`: Export session
-   - `atom-agent session import <file>`: Import session to workspace
+### Phase 2: Scheduler and Runtime State
 
-6. **API for Multi-Workspace**
-   - Programmatic workspace switching
-   - Workspace-aware tool registration
-   - Per-workspace tool configurations
+1. Implement per-kind scheduling rules (`once`, `cron`, `interval`).
+2. Implement delay-only jitter and deterministic `next_run` persistence.
+3. Persist runtime state at `.proactive/state.json`.
+4. Enforce non-overlap per task ID.
 
-#### Implementation Steps
+### Phase 3: Daemon Loop and Dispatch
 
-1. Create `atom_agent/config/__init__.py` and schema
-2. Create `atom_agent/workspace/registry.py`
-3. Refactor `SessionManager` for workspace association
-4. Update `AgentLoop` for workspace awareness
-5. Add workspace CLI commands
-6. Add session management CLI commands
-7. Add configuration file support
-8. Add migration tool for existing workspaces
-9. Update documentation
+1. Add CLI: `atom-agent daemon run --once`.
+2. Add continuous mode with `--poll-sec`.
+3. Scan all registered workspaces each cycle.
+4. Dispatch due tasks using canonical `session_key` target.
+5. Keep invalid workspace configs isolated (log + skip).
 
-## File Templates
+### Phase 4: Verification and Hardening
 
-### IDENTITY.md (Default)
-```markdown
-# AtomAgent
+1. Unit tests for parser/scheduler/state.
+2. Integration tests for one-cycle and multi-workspace daemon runs.
+3. Real provider verification with runtime logs.
+4. Validate restart behavior and duplicate-send prevention.
 
-You are AtomAgent, a proactive AI assistant capable of long-running tasks and autonomous operation.
+## Detailed Work Packages
 
-## Core Traits
-- Helpful and responsive
-- Thorough in task completion
-- Proactive in communication
-- Adaptable to user preferences
+### Work Package A: Workspace Template + CLI Surface
 
-## Capabilities
-- Long-running task execution
-- Autonomous operation with user oversight
-- Memory and context retention across sessions
-- Multi-channel communication
+1. Add `atom_agent/workspace/templates/PROACTIVE.md` with default disabled config.
+2. Update workspace init logic to always materialize template.
+3. Extend CLI command tree with `proactive validate` and `proactive show`.
+4. Ensure CLI output shows parse errors with task IDs and offending fields.
 
-## Behavioral Guidelines
-- State intent before taking action
-- Verify assumptions before proceeding
-- Communicate progress on long tasks
-- Ask for clarification when uncertain
-```
+### Work Package B: Proactive Config Parsing
 
-### SOUL.md (Template)
-```markdown
-# Core Values
+1. Implement JSON block extraction from markdown content.
+2. Enforce required schema for top-level and task-specific fields.
+3. Normalize defaults (`enabled=true`, timezone fallback) in parser output.
+4. Return machine-usable error objects for CLI and daemon logging.
 
-## Ethics
-- Respect user privacy and data
-- Be honest about capabilities and limitations
-- Prioritize user safety and wellbeing
+### Work Package C: Schedule Engine + Runtime State
 
-## Communication Style
-- Clear and concise
-- Appropriate level of detail
-- Proactive updates on progress
+1. Build due-check API with `now` injection for deterministic tests.
+2. Persist per-task runtime fields (`next_run`, `last_run`, `last_status`, `last_error`).
+3. Implement jitter sampling per occurrence and persist effective timestamp.
+4. Guarantee atomic state writes to avoid corruption on interrupted process.
 
-## Learning
-- Remember user preferences
-- Improve based on feedback
-- Maintain consistency with established patterns
-```
+### Work Package D: Daemon Service and Dispatch
 
-## Migration Strategy
+1. Implement one-cycle service entrypoint (`--once`) for integration tests.
+2. Implement poll loop with workspace reload on each cycle.
+3. Convert due task to normal `InboundMessage` against canonical `session_key`.
+4. Serialize task execution per task ID to prevent overlap.
+5. Log per-task lifecycle with structured fields for auditability.
 
-### From Current AtomAgent
-1. Auto-detect existing workspace structure
-2. Create `IDENTITY.md` from current hardcoded identity
-3. Preserve existing `memory/` and `sessions/` directories
-4. No breaking changes to existing code paths
+### Work Package E: Context and Behavior Consistency
 
-### Backward Compatibility
-- `ContextBuilder(workspace)` continues to work
-- Default identity used when `IDENTITY.md` missing
-- Existing session files remain valid
+1. Inject compact proactive brief into context build path.
+2. Keep brief informational only; runtime state remains in `.proactive/state.json`.
+3. Ensure daemon uses same memory/session persistence files as interactive mode.
 
-## Testing Strategy
+## Acceptance Gates
 
-1. **Unit Tests**
-   - Workspace initialization
-   - File loading and parsing
-   - Identity resolution
-   - Configuration management
+### Gate 1 (After Phase 1)
 
-2. **Integration Tests**
-   - Full agent loop with file-based context
-   - Workspace switching
-   - Session persistence across workspaces
+1. New workspace contains `PROACTIVE.md`.
+2. `atom-agent proactive validate` exits non-zero on malformed config.
+3. `atom-agent proactive show` prints normalized task summary for valid config.
 
-3. **E2E Tests**
-   - CLI commands
-   - Multi-workspace scenarios
+### Gate 2 (After Phase 2)
 
-## Risks and Mitigations
+1. Scheduler test suite covers `once`, `cron`, `interval`, jitter, and restart cases.
+2. `.proactive/state.json` survives repeated daemon cycles without schema drift.
+3. Re-running schedule computation with same state does not duplicate `once` dispatch.
 
-| Risk | Mitigation |
-|------|------------|
-| Breaking existing users | Backward compatible defaults |
-| File corruption | Backup before writes, validation |
-| Performance impact | Lazy loading, caching |
-| Complex workspace management | Clear CLI, good defaults |
+### Gate 3 (After Phase 3)
 
-## Timeline Estimate
+1. `atom-agent daemon run --once` dispatches only due enabled tasks.
+2. Invalid config in one workspace does not block other workspaces in same cycle.
+3. Two due tasks for different IDs can run independently; same ID is non-overlapping.
 
-- **Milestone 1**: ~3-4 days
-  - Workspace manager: 1 day
-  - ContextBuilder refactor: 1 day
-  - CLI commands: 0.5 day
-  - Testing: 1 day
+### Gate 4 (After Phase 4)
 
-- **Milestone 2**: ~4-5 days
-  - Config system: 1 day
-  - Workspace registry: 1 day
-  - Session refactoring: 1 day
-  - CLI commands: 1 day
-  - Testing: 1 day
+1. Real provider run confirms proactive output reaches target session.
+2. Restart test confirms no duplicate sends for completed `once` task.
+3. Runtime logs include enough fields to reconstruct task timeline.
 
-## Dependencies
+## Stepped Commit Sequence for Implementation
 
-- No new external dependencies required
-- Uses existing `pathlib`, `pydantic` (if available)
-- Optional: `rich` for enhanced CLI output
+1. `feat(proactive): add PROACTIVE workspace template and parser models`
+2. `feat(cli): add proactive validate/show commands`
+3. `feat(proactive): add scheduler and persistent runtime state`
+4. `feat(daemon): add daemon run --once and polling service loop`
+5. `feat(agent): route due proactive tasks through AgentLoop`
+6. `test(proactive): add parser/scheduler/state integration coverage`
+7. `docs: record runtime verification evidence and operational notes`
 
-## Open Questions
+## Contract Source
 
-1. Should workspaces support inheritance (e.g., work-assistant extends default)?
-2. How to handle workspace switching during active sessions?
-3. Should there be a "global" memory that spans workspaces?
-4. How to sync workspaces across machines (if at all)?
-
-## References
-
-- Nanobot workspace implementation: `/Users/alive/workspace/OSS_contribute/nanobot`
-- Current AtomAgent context: `atom_agent/agent/context.py`
-- Current AtomAgent memory: `atom_agent/memory/store.py`
+Normative behavioral rules remain in [agent_docs/proactive-task-rules.md](./proactive-task-rules.md). This plan maps those rules into implementation tasks and milestones.

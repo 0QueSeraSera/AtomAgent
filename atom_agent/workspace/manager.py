@@ -14,7 +14,7 @@ from atom_agent.logging import get_logger
 logger = get_logger("workspace.manager")
 
 # Bootstrap files that define the agent's context
-BOOTSTRAP_FILES = ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md"]
+BOOTSTRAP_FILES = ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md", "PROACTIVE.md"]
 
 # Required directories in a workspace
 WORKSPACE_DIRS = ["memory", "sessions"]

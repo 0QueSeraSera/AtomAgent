@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
 from atom_agent.workspace import WorkspaceManager
 
 
@@ -86,9 +87,9 @@ Your workspace is at: {workspace_path}
 - After writing or editing a file, re-read it if accuracy matters.
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
-- You can operate autonomously for long-running tasks. Use the message tool to update users proactively.
+- You can operate autonomously for long-running tasks. The runtime delivers your final response.
 
-Reply directly with text for conversations. Use the 'message' tool for proactive communication."""
+Reply directly with text for conversations."""
         else:
             # Wrap in agent name header
             return f"""# {self.agent_name}
@@ -109,9 +110,9 @@ Your workspace is at: {workspace_path}
 - After writing or editing a file, re-read it if accuracy matters.
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
-- You can operate autonomously for long-running tasks. Use the message tool to update users proactively.
+- You can operate autonomously for long-running tasks. The runtime delivers your final response.
 
-Reply directly with text for conversations. Use the 'message' tool for proactive communication."""
+Reply directly with text for conversations."""
 
     @staticmethod
     def _build_runtime_context(channel: str | None, chat_id: str | None) -> str:
@@ -133,7 +134,37 @@ Reply directly with text for conversations. Use the 'message' tool for proactive
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")
 
+        proactive_brief = self._build_proactive_brief()
+        if proactive_brief:
+            parts.append(proactive_brief)
+
         return "\n\n".join(parts) if parts else ""
+
+    def _build_proactive_brief(self) -> str:
+        """Build compact proactive summary for model context."""
+        proactive_file = self.workspace / "PROACTIVE.md"
+        if not proactive_file.exists():
+            return ""
+
+        try:
+            config = parse_proactive_file(proactive_file)
+        except ProactiveValidationError as err:
+            lines = ["WARNING: PROACTIVE.md is invalid; scheduling is disabled for invalid tasks."]
+            for issue in err.issues[:5]:
+                lines.append(f"- [{issue.code}] {issue.path}: {issue.message}")
+            return "## PROACTIVE.md (brief)\n\n" + "\n".join(lines)
+
+        lines = [
+            f"enabled: {config.enabled}",
+            f"timezone: {config.timezone}",
+            f"active_tasks: {len(config.active_tasks)} / {len(config.tasks)}",
+        ]
+        for task in config.active_tasks:
+            lines.append(
+                f"- {task.task_id} [{task.kind}] -> {task.session_key} | {task.schedule_summary()}"
+            )
+
+        return "## PROACTIVE.md (brief)\n\n" + "\n".join(lines)
 
     def _get_memory_context(self) -> str:
         """Get the memory context from MEMORY.md."""

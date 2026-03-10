@@ -17,7 +17,8 @@ from atom_agent.logging import get_logger, set_session_key, trace_context
 from atom_agent.memory.store import MemoryStore
 from atom_agent.provider.base import LLMProvider
 from atom_agent.session.manager import Session, SessionManager
-from atom_agent.tools.message import MessageTool
+from atom_agent.tools.bash import BashTool
+from atom_agent.tools.fetch import FetchTool
 from atom_agent.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -108,11 +109,22 @@ class AgentLoop:
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
-        """Register the default set of tools."""
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        """Register the default model-facing tool set."""
+        self.tools.register(FetchTool(default_timeout=30.0))
+        self.tools.register(
+            BashTool(
+                default_timeout=60.0,
+                blocked_commands=["rm", "sudo", "mkfs"],
+                default_cwd=str(self.workspace),
+            )
+        )
 
     def register_tool(self, tool: Any) -> None:
         """Register a custom tool."""
+        if getattr(tool, "name", None) == "message":
+            raise ValueError(
+                "Tool 'message' is not model-facing. Use AgentLoop.send_proactive_message()."
+            )
         self.tools.register(tool)
 
     def unregister_tool(self, name: str) -> None:
@@ -201,12 +213,6 @@ class AgentLoop:
             "sessions": len(self.sessions.list_sessions()),
             "tools": self.tools.tool_names,
         }
-
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
-        """Update context for all tools that need routing info."""
-        if tool := self.tools.get("message"):
-            if hasattr(tool, "set_context"):
-                tool.set_context(channel, chat_id, message_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -467,7 +473,6 @@ class AgentLoop:
                 "Session loaded",
                 extra={"session_key": key, "msg_count": len(session.messages)},
             )
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
                 history=history,
@@ -492,7 +497,6 @@ class AgentLoop:
                 "Session loaded",
                 extra={"session_key": key, "msg_count": len(session.messages), "proactive": True},
             )
-            self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
                 history=history,
@@ -581,11 +585,6 @@ class AgentLoop:
             _task = asyncio.create_task(_consolidate_and_unlock())
             self._consolidation_tasks.add(_task)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
-        if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool):
-                message_tool.start_turn()
-
         history = session.get_history(max_messages=self.memory_window)
         initial_messages = self.context.build_messages(
             history=history,
@@ -617,10 +616,6 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
-
-        # Don't send duplicate response if message tool was used
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
-            return None
 
         return OutboundMessage(
             channel=msg.channel,

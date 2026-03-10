@@ -1,89 +1,153 @@
 # Progress Tracking
 
-## Current Status: Planning Complete
+## Current Status: Implementation Active (Daemon + Proactive Messaging)
 
-### Completed
-- [x] Analyzed nanobot workspace implementation
-- [x] Analyzed current AtomAgent context system
-- [x] Created comprehensive plan for file-based context
-- [x] Defined two milestones with clear scope
-- [x] Created implementation steps for each milestone
+## Scope
 
-### Next Steps (Milestone 1)
-- [ ] Create `atom_agent/workspace/` module
-- [ ] Implement `WorkspaceManager` class
-- [ ] Create default template files
-- [ ] Refactor `ContextBuilder` for file-based identity
-- [ ] Add CLI commands
-- [ ] Add tests
-- [ ] Update documentation
+Feature: background daemon runtime with proactive message scheduling (randomized and precise timestamp tasks), driven by workspace `PROACTIVE.md`.
 
-### Next Steps (Milestone 2)
-- [ ] Create config module
-- [ ] Implement workspace registry
-- [ ] Refactor session management
-- [ ] Update AgentLoop
-- [ ] Add extended CLI commands
-- [ ] Add migration tool
-- [ ] Update documentation
+## Worktree / Branch
+
+- Worktree: `/Users/alive/workspace/OSS_contribute/AtomAgent-Workspace/atomAgent-worktree-feat-daemon-proactive`
+- Branch: `feat/daemon-proactive-messaging`
+
+## Completed in This Planning Pass (2026-03-09)
+
+- [x] Created isolated worktree and branch for this feature.
+- [x] Reviewed current architecture:
+  - `AgentLoop`
+  - `MessageBus` / `ProactiveScheduler`
+  - workspace/config/session management
+  - CLI entry points
+- [x] Archived deprecated docs:
+  - `agent_docs/plan.md` -> `agent_docs/archived/file-based-context/plan.md`
+  - `agent_docs/progress.md` -> `agent_docs/archived/file-based-context/progress.md`
+- [x] Replaced planning docs with new daemon/proactive-focused plan.
+- [x] Clarified normative scheduling contract in `agent_docs/plan.md` to prevent drift across implementations:
+  - precise `once`/`cron`/`interval` semantics
+  - jitter behavior
+  - downtime catch-up behavior
+  - non-overlap and daemon loop rules
+- [x] Added authoritative proactive rules document:
+  - `agent_docs/proactive-task-rules.md`
+  - includes context-brief injection policy and agent edit authority for `PROACTIVE.md`
+
+## Planning Refresh Update (2026-03-09)
+
+- [x] Rebuilt `agent_docs/plan.md` with a tighter implementation-focused structure.
+- [x] Added file-level work packages and phase acceptance gates.
+- [x] Added explicit stepped commit sequence for implementation execution.
+- [x] Committed planning refresh in stepped commits:
+  - `c110f67` docs(plan): rebuild daemon proactive implementation skeleton
+  - `e5cbefb` docs(plan): add work packages and phase acceptance gates
+
+## Implementation Update (2026-03-09)
+
+- [x] Added workspace proactive template and bootstrap integration:
+  - `atom_agent/workspace/templates/PROACTIVE.md`
+  - workspace init now creates `PROACTIVE.md`
+- [x] Added proactive config parser/models package:
+  - `atom_agent/proactive/models.py`
+  - `atom_agent/proactive/parser.py`
+  - structured validation errors for CLI/daemon
+- [x] Added proactive CLI commands:
+  - `atom-agent proactive validate`
+  - `atom-agent proactive show`
+- [x] Added scheduler and persistent runtime state:
+  - `atom_agent/proactive/scheduler.py`
+  - `atom_agent/proactive/state.py`
+  - state persisted at `.proactive/state.json`
+- [x] Added daemon runtime and service:
+  - `atom_agent/daemon/runtime.py`
+  - `atom_agent/daemon/service.py`
+  - CLI: `atom-agent daemon run [--once] [--poll-sec N]`
+- [x] Added proactive brief injection into agent context:
+  - `## PROACTIVE.md (brief)` section in system prompt
+  - includes parse warnings when config is invalid
+- [x] Fixed CLI package entry-point exit-code propagation:
+  - `python -m atom_agent` now returns subcommand non-zero exit codes
+- [x] Added tests:
+  - parser: `tests/test_proactive_parser.py`
+  - CLI proactive: `tests/test_cli_proactive.py`
+  - scheduler/state: `tests/test_proactive_scheduler_state.py`
+  - daemon integration: `tests/test_daemon_service.py`
+  - context brief: `tests/test_context_proactive_brief.py`
+
+### Implementation Commits (Stepped)
+
+- `fb96906` feat(proactive): add PROACTIVE template and parser models
+- `d385d55` feat(cli): add proactive validate/show commands
+- `cbbdc50` feat(proactive): add scheduler and persistent runtime state
+- `92b52bf` feat(daemon): add daemon run --once and polling loop
+- `d84fe01` feat(agent): inject proactive brief into system context
+
+## Tool Management + CLI UX Update (2026-03-10)
+
+- [x] Investigated real runtime/session logs for tool exposure mismatch:
+  - session: `cli_4b659f78-6be0-4a7c-bb5e-969a8d22e6da`
+  - confirmed model only received `message` tool in that run.
+- [x] Changed default model-facing tools to fundamental set only:
+  - `fetch`
+  - `bash`
+- [x] Removed `message` from default model tool registration path.
+- [x] Guarded `agent.register_tool()` to reject model-facing registration of `message`.
+- [x] Updated system-prompt guidance to stop instructing model to use a `message` tool.
+- [x] Improved CLI readability with differentiated rendering:
+  - colorized user/model/tool/thinking/system labels (TTY-aware)
+  - session id rendered as dim system metadata
+  - processing indicator while waiting on model output
+- [x] Added unit coverage:
+  - `tests/test_agent_default_tools.py`
+    - default tools are exactly `fetch` + `bash`
+    - context prompt no longer instructs `message` tool usage
+    - `message` tool registration raises a model-surface error
+- [x] Validation runs:
+  - `ruff check` on modified files
+  - `pytest` targeted suite (10 tests passed)
+  - real CLI entrypoint smoke run (`python -m atom_agent`, piped `/exit`)
+
+## Next Implementation Steps
+
+### Phase 1: Config + Validation
+- [x] Add `PROACTIVE.md` template under `atom_agent/workspace/templates/`.
+- [x] Include `PROACTIVE.md` in workspace initialization behavior.
+- [x] Implement markdown+JSON parser for proactive task configuration.
+- [x] Add validation command: `atom-agent proactive validate`.
+- [x] Add inspection command: `atom-agent proactive show`.
+
+### Phase 2: Daemon Core
+- [x] Add daemon runtime module (`atom_agent/daemon/`).
+- [x] Add one-cycle mode: `atom-agent daemon run --once`.
+- [x] Add loop mode with polling interval.
+- [x] Add workspace scanning across registered workspaces.
+
+### Phase 3: Scheduler + State
+- [x] Implement task kinds: `once`, `cron`, `interval`.
+- [x] Implement jitter support for random/lively behavior.
+- [x] Persist per-task runtime state for restart safety.
+- [ ] Add duplicate-send protection and retry/cooldown policy.
+
+### Phase 4: Verification
+- [x] Unit tests: parser, schedule calculations, state persistence.
+- [x] Integration tests: multi-workspace daemon cycle and dispatch.
+- [ ] Real runtime verification with live provider and logs.
+- [ ] Manual verification of exact timestamp alarms and randomized proactive cadence.
+
+## Key Risks
+
+1. Duplicate proactive sends on restart.
+2. Invalid/ambiguous `PROACTIVE.md` authoring by users.
+3. Outbound routing mismatch between daemon and interactive mode.
+4. Timezone and DST edge cases for precise tasks.
+
+## Mitigation Notes
+
+1. Persist task state atomically and track idempotency markers.
+2. Use strict schema validation plus CLI validator.
+3. Route via canonical `session_key` (`channel:chat_id`) and shared `AgentLoop` path.
+4. Enforce explicit timezone in config with deterministic schedule calculations.
 
 ## Blockers
-None currently.
 
-## Notes
-- User wants evolvable agent identity (role, soul, memory)
-- Sessions should be linked to workspaces
-- Need to support session switching within a workspace
-- Referencing nanobot's implementation for patterns
-
-## 2026-03-09 Updates
-
-### Completed
-- Added workspace/session management TUI (`atom-agent tui`) with:
-  - Workspace overview table (active marker, validity, session count, registration status)
-  - Commands to open details, switch active workspace, initialize/repair workspace, and create workspace
-- Added `workspace overview` action and upgraded `workspace list` to show table-style overview with session counts.
-- Fixed session CLI flow for uninitialized paths:
-  - `atom-agent session --workspace <path> list` now auto-initializes missing workspace context files instead of failing on missing `IDENTITY.md`.
-- Preserved workspace initialization guarantees:
-  - `init` and auto-init paths ensure default context files (`IDENTITY.md`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`) are present.
-  - `MEMORY.md` and `HISTORY.md` now get starter default content instead of being empty.
-- Added CLI tests for:
-  - init context file creation with default content
-  - session list auto-initialization behavior
-  - workspace overview with session counts
-  - one-shot TUI rendering (`tui --once`)
-
-### Verification
-- `pytest -q tests/test_cli_management.py` passed (4/4).
-- `ruff check atom_agent tests/test_cli_management.py` passed.
-- Manual run confirmed:
-  - `python -m atom_agent session --workspace ./ws3 list`
-  - Output now initializes context files and shows `No sessions found.` instead of validation error.
-
-## 2026-03-09 Updates (Workspace UX + Session IDs)
-
-### Completed
-- Unified default workspace resolution across CLI/chat/config to active workspace in `~/.atom-agents/workspaces/`.
-- Added compatibility migration path for legacy homes (`~/.atomagent`, `~/.atom-agent`) into the new `~/.atom-agents` location.
-- Updated interactive chat to use UUID session IDs by default instead of fixed `cli:interactive`.
-- Added in-chat session lifecycle commands:
-  - `/new` to start a fresh UUID session
-  - `/sessions` to list workspace sessions
-  - `/resume <uuid|key>` to continue prior sessions
-- Added in-chat workspace/dashboard commands to reduce split between CLI and manager UX:
-  - `/dashboard` (workspace/session stats overview)
-  - `/workspace` (current workspace + session info)
-  - `/use <workspace>` (switch active workspace + agent context)
-- Improved dashboard discoverability by adding command hints directly to workspace overview output.
-- Added tests:
-  - `tests/test_cli_chat.py` for UUID session behavior and resume flow
-  - extra assertions in `tests/test_cli_management.py` for command hints and `~/.atom-agents` default root
-
-### Verification
-- `ruff check atom_agent tests/test_cli_management.py tests/test_cli_chat.py` passed.
-- `pytest -q tests/test_cli_management.py tests/test_cli_chat.py` passed (8/8).
-- Manual interface checks (with writable HOME sandbox path):
-  - `HOME=/tmp/atom-agent-home python -m atom_agent workspace overview`
-  - `HOME=/tmp/atom-agent-home python -m atom_agent tui --once`
-  - Confirmed default path renders as `/tmp/.../.atom-agents/workspaces/default` and dashboard now includes command hints.
+- No hard blocker for implementation start.
+- Product decision needed: first supported outbound channel(s) for daemon besides local CLI display.

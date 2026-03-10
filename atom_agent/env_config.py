@@ -87,11 +87,16 @@ class Config:
 
         # Read from environment variables
         workspace_env = os.environ.get("ATOMAGENT_WORKSPACE") or os.environ.get("ATOM_WORKSPACE")
+        workspace = (
+            Path(workspace_env).expanduser().resolve()
+            if workspace_env
+            else _default_workspace_path()
+        )
         config = cls(
             deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY"),
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            workspace=Path(workspace_env) if workspace_env else _default_workspace_path(),
+            workspace=workspace,
             model=os.environ.get("ATOM_MODEL"),
             debug=os.environ.get("ATOM_DEBUG", "").lower() in ("1", "true", "yes"),
         )

@@ -13,6 +13,10 @@ Usage:
     atom-agent workspace overview    Workspace/session overview table
     atom-agent workspace switch <name> Switch active workspace
     atom-agent workspace create <name> Create new workspace
+    atom-agent proactive validate    Validate PROACTIVE.md configuration
+    atom-agent proactive show        Show normalized proactive task summary
+    atom-agent daemon run --once    Run one proactive daemon cycle
+    atom-agent daemon run           Run daemon polling loop
 
     # Session management
     atom-agent session list          List sessions in current workspace
@@ -162,6 +166,48 @@ def parse_args() -> argparse.Namespace:
         help="Also delete workspace files (for delete)",
     )
 
+    # proactive subcommand
+    proactive_parser = subparsers.add_parser("proactive", help="Manage proactive configuration")
+    proactive_parser.add_argument(
+        "action",
+        choices=["validate", "show"],
+        help="Action to perform",
+    )
+    proactive_parser.add_argument(
+        "--workspace",
+        "-w",
+        type=Path,
+        default=None,
+        help="Workspace directory",
+    )
+
+    # daemon subcommand
+    daemon_parser = subparsers.add_parser("daemon", help="Run proactive daemon service")
+    daemon_parser.add_argument(
+        "action",
+        choices=["run"],
+        nargs="?",
+        default="run",
+        help="Action to perform",
+    )
+    daemon_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one daemon cycle and exit",
+    )
+    daemon_parser.add_argument(
+        "--poll-sec",
+        type=float,
+        default=30.0,
+        help="Polling interval in seconds for loop mode",
+    )
+    daemon_parser.add_argument(
+        "--workspace-path",
+        type=Path,
+        default=None,
+        help="Optional single workspace path override",
+    )
+
     # session subcommand
     session_parser = subparsers.add_parser("session", help="Manage sessions")
     session_parser.add_argument(
@@ -254,6 +300,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  - {config.path}/AGENTS.md    (technical guidelines)")
         print(f"  - {config.path}/USER.md      (user preferences)")
         print(f"  - {config.path}/TOOLS.md     (tool usage guidelines)")
+        print(f"  - {config.path}/PROACTIVE.md (proactive task configuration)")
         print(f"  - {config.path}/memory/      (MEMORY.md, HISTORY.md)")
         print(f"  - {config.path}/sessions/    (conversation history)")
         return 0
@@ -382,6 +429,138 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     return 1
 
 
+def _proactive_schedule_label(task) -> str:
+    if task.kind == "once":
+        return f"once at {task.at.isoformat() if task.at else '<missing>'}"
+    if task.kind == "cron":
+        return f"cron {task.cron}"
+    return f"every {task.every_sec}s"
+
+
+def cmd_proactive(args: argparse.Namespace) -> int:
+    """Manage proactive task configuration."""
+    from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
+
+    workspace = _resolve_workspace_path(args.workspace)
+    proactive_path = workspace / "PROACTIVE.md"
+
+    if not proactive_path.exists():
+        print(
+            f"Error: Missing proactive config file: {proactive_path}\n"
+            "Run `atom-agent init <workspace>` to create default workspace files.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        config = parse_proactive_file(proactive_path)
+    except ProactiveValidationError as err:
+        print(f"✗ PROACTIVE config invalid: {proactive_path}", file=sys.stderr)
+        for issue in err.issues:
+            print(f"  - [{issue.code}] {issue.path}: {issue.message}", file=sys.stderr)
+        return 1
+
+    if args.action == "validate":
+        print(f"✓ PROACTIVE config is valid: {proactive_path}")
+        print(f"  Version: {config.version}")
+        print(f"  Enabled: {config.enabled}")
+        print(f"  Timezone: {config.timezone}")
+        print(f"  Tasks: {len(config.tasks)} total, {len(config.active_tasks)} enabled")
+        return 0
+
+    if args.action == "show":
+        print(f"Workspace: {workspace}")
+        print(f"Config: {proactive_path}")
+        print(f"Enabled: {config.enabled}")
+        print(f"Timezone: {config.timezone}")
+        print(f"Tasks: {len(config.tasks)} total, {len(config.active_tasks)} enabled")
+        if not config.tasks:
+            print("\n(no tasks)")
+            return 0
+
+        print("\nTask Summary:")
+        for task in config.tasks:
+            status = "enabled" if task.enabled else "disabled"
+            schedule = _proactive_schedule_label(task)
+            jitter = f", jitter={task.jitter_sec}s" if task.jitter_sec else ""
+            print(f"- {task.task_id} [{task.kind}] ({status})")
+            print(f"  session_key: {task.session_key}")
+            print(f"  schedule: {schedule}{jitter}")
+        return 0
+
+    return 1
+
+
+def cmd_daemon(args: argparse.Namespace) -> int:
+    """Run daemon service for proactive scheduling."""
+    from atom_agent.daemon import DaemonService
+
+    # Subcommands usually skip logging setup in main(), so daemon configures it here.
+    config = Config.load(env_file=args.env_file)
+    if args.debug:
+        config.debug = True
+    if args.model:
+        config.model = args.model
+    if args.workspace:
+        config.workspace = args.workspace
+
+    log_config = LoggingConfig(
+        level="DEBUG" if args.debug else "INFO",
+        format="json" if args.json else "text",
+        output="file",
+        log_content=args.debug,
+    )
+    setup_logging(log_config)
+
+    errors = config.validate(args.provider)
+    if errors:
+        for error in errors:
+            print(f"Error: {error}", file=sys.stderr)
+        return 1
+
+    try:
+        provider = get_provider(args.provider, config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    workspace_paths = [args.workspace_path] if args.workspace_path else None
+    service = DaemonService(
+        provider=provider,
+        model=config.model,
+        poll_sec=args.poll_sec,
+        workspace_paths=workspace_paths,
+    )
+
+    if args.once:
+        reports = asyncio.run(service.run_once())
+        if not reports:
+            print("No due proactive tasks.")
+            return 0
+
+        for report in reports:
+            if report.status == "success":
+                print(
+                    f"[{report.workspace}] {report.task_id}: success "
+                    f"(outputs={report.output_count})"
+                )
+            else:
+                print(
+                    f"[{report.workspace}] {report.task_id}: failed ({report.error})",
+                    file=sys.stderr,
+                )
+        return 1 if any(report.status != "success" for report in reports) else 0
+
+    print(f"Starting daemon loop (poll={args.poll_sec}s). Press Ctrl+C to stop.")
+    try:
+        asyncio.run(service.run_forever())
+    except KeyboardInterrupt:
+        print("\nDaemon interrupted.")
+        return 130
+
+    return 0
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Manage sessions."""
     from atom_agent.cli.management import ensure_workspace_initialized
@@ -479,6 +658,10 @@ def main() -> int:
         return cmd_identity(args)
     elif args.command == "workspace":
         return cmd_workspace(args)
+    elif args.command == "proactive":
+        return cmd_proactive(args)
+    elif args.command == "daemon":
+        return cmd_daemon(args)
     elif args.command == "session":
         return cmd_session(args)
     elif args.command == "tui":
