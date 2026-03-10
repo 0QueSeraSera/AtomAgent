@@ -26,16 +26,16 @@ See: `agent_docs/plan.md`
 ## Execution Checklist
 
 1. [x] Add channel runtime primitives (`channels/base.py`, `channels/manager.py`).
-2. [ ] Implement Feishu adapter (`channels/feishu.py`) for inbound/outbound messaging.
-3. [ ] Add Feishu config validation and startup readiness checks.
+2. [x] Implement Feishu adapter (`channels/feishu.py`) for inbound/outbound messaging.
+3. [x] Add Feishu config validation and startup readiness checks.
 4. [x] Add gateway runtime host (`gateway/runtime.py`) and lifecycle wiring.
 5. [ ] Move proactive ticking into gateway runtime path.
-6. [ ] Add `atom-agent gateway run` command.
+6. [x] Add `atom-agent gateway run` command.
 7. [ ] Remove daemon package and daemon CLI command.
 8. [ ] Extend proactive schema for optional explicit transport target.
 9. [ ] Update tests from daemon-focused to gateway-focused coverage (including Feishu paths).
 10. [ ] Run real runtime verification with Feishu adapter and real model response.
-11. [ ] Publish Feishu connection guide and troubleshooting in docs.
+11. [x] Publish Feishu connection guide and troubleshooting in docs.
 
 ## Open Items
 
@@ -65,3 +65,19 @@ See: `agent_docs/plan.md`
 5. Commits created in this commencement pass:
    - `0190f1e` feat(channels): add channel adapter contract and manager
    - `17351ce` feat(gateway): add runtime host for channels and agent loop
+6. Phase 1.5 Feishu delivery implementation landed:
+   - `atom_agent/channels/feishu.py`
+   - `tests/test_channels_feishu.py`
+   - webhook mapping, outbound send path, token fetch cache, dedup, allowlist checks
+7. Gateway CLI command landed:
+   - `atom_agent/cli/__main__.py` -> `atom-agent gateway run [--once]`
+   - Feishu readiness checks with actionable startup errors
+8. Feishu operator docs added:
+   - `agent_docs/notes/feishu-connection-guide.md`
+   - `README.md` gateway+Feishu quickstart section
+9. Validation run (unit + integration-lite):
+   - `PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 ./.venv/bin/python -m pytest -p no:cacheprovider tests/test_channels_feishu.py tests/test_cli_gateway.py tests/test_channels_manager.py tests/test_gateway_runtime.py`
+   - Result: 12 passed.
+10. Real CLI readiness verification:
+   - `atom-agent gateway run --once --workspace /tmp/atomagent-gw-verify-<pid>`
+   - Result: gateway starts/stops and prints Feishu readiness summary.

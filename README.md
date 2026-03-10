@@ -163,6 +163,25 @@ The agent maintains long-term memory automatically:
 
 Memory is consolidated when conversations exceed the memory window.
 
+## Gateway + Feishu (v1)
+
+Gateway mode hosts the long-running agent runtime with channel adapters:
+
+```bash
+export DEEPSEEK_API_KEY=...
+export FEISHU_APP_ID=cli_xxx
+export FEISHU_APP_SECRET=xxx
+atom-agent gateway run --workspace ~/.atom-agents/workspaces/default
+```
+
+Readiness-only startup check:
+
+```bash
+atom-agent gateway run --once --workspace ~/.atom-agents/workspaces/default
+```
+
+See [`agent_docs/notes/feishu-connection-guide.md`](agent_docs/notes/feishu-connection-guide.md) for full setup and troubleshooting.
+
 ## License
 
 MIT
