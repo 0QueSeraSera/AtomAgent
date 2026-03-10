@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,7 +12,9 @@ import pytest
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.channels import ChannelAdapter, InboundCallback
 from atom_agent.gateway import GatewayRuntime
+from atom_agent.proactive.state import load_runtime_state
 from atom_agent.provider.base import LLMProvider, LLMResponse
+from atom_agent.session import SessionManager
 from atom_agent.workspace import WorkspaceManager
 
 
@@ -71,6 +74,21 @@ async def _wait_for(predicate, timeout: float = 2.0) -> None:
     raise TimeoutError("Condition not met before timeout")
 
 
+def _write_proactive(path: Path, payload: str) -> None:
+    path.write_text(
+        textwrap.dedent(
+            f"""
+            # Proactive Configuration
+
+            ```json
+            {payload}
+            ```
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.asyncio
 async def test_gateway_runtime_processes_inbound_and_sends_outbound(tmp_path: Path) -> None:
     workspace = tmp_path / "gw-runtime"
@@ -112,3 +130,69 @@ async def test_gateway_runtime_start_stop_are_idempotent(tmp_path: Path) -> None
     await runtime.stop()
     assert runtime.running is False
     assert adapter.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_dispatches_due_proactive_task(tmp_path: Path) -> None:
+    workspace = tmp_path / "gw-proactive"
+    WorkspaceManager(workspace).init_workspace(name="gw-proactive")
+
+    _write_proactive(
+        workspace / "PROACTIVE.md",
+        """{
+  "version": 1,
+  "enabled": true,
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": "wake-up",
+      "kind": "once",
+      "at": "2026-03-01T08:00:00+00:00",
+      "session_key": "cli:memory-session",
+      "target": {
+        "channel": "feishu",
+        "chat_id": "chat-target",
+        "thread_id": "thread-123"
+      },
+      "prompt": "Send wake-up reminder."
+    }
+  ]
+}""",
+    )
+
+    runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
+    adapter = FakeAdapter("feishu")
+    runtime.register_adapter(adapter)
+
+    await runtime.start()
+    await _wait_for(lambda: len(adapter.sent) > 0)
+    await runtime.stop()
+
+    assert adapter.sent[0].channel == "feishu"
+    assert adapter.sent[0].chat_id == "chat-target"
+    assert adapter.sent[0].metadata["task_id"] == "wake-up"
+    assert adapter.sent[0].metadata["proactive"] is True
+    assert adapter.sent[0].metadata["thread_id"] == "thread-123"
+
+    state = load_runtime_state(workspace)
+    assert state.tasks["wake-up"].completed_at is not None
+
+    session = SessionManager(workspace, workspace.name).get_or_create("cli:memory-session")
+    assert len(session.messages) > 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_ignores_invalid_proactive_config(tmp_path: Path) -> None:
+    workspace = tmp_path / "gw-invalid-proactive"
+    WorkspaceManager(workspace).init_workspace(name="gw-invalid-proactive")
+    (workspace / "PROACTIVE.md").write_text("# bad config", encoding="utf-8")
+
+    runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
+    adapter = FakeAdapter("feishu")
+    runtime.register_adapter(adapter)
+
+    await runtime.start()
+    await asyncio.sleep(0.2)
+    await runtime.stop()
+
+    assert adapter.sent == []

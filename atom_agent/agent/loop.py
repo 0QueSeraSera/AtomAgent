@@ -549,7 +549,7 @@ class AgentLoop:
             channel, chat_id = (
                 msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
             )
-            key = f"{channel}:{chat_id}"
+            key = session_key or msg.session_key_override or f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             logger.debug(
                 "Session loaded",
@@ -569,6 +569,7 @@ class AgentLoop:
                 channel=channel,
                 chat_id=chat_id,
                 content=final_content or "Background task completed.",
+                metadata=msg.metadata or {},
             )
 
         # Proactive messages
