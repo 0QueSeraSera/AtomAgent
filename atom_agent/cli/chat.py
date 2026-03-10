@@ -69,10 +69,11 @@ class AsyncCLIChat:
 
     async def start(self) -> None:
         """Start the CLI chat session."""
-        # Setup workspace
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "memory").mkdir(exist_ok=True)
-        (self.workspace / "sessions").mkdir(exist_ok=True)
+        # Ensure workspace has full context (IDENTITY.md, SOUL.md, etc.)
+        from atom_agent.cli.management import ensure_workspace_initialized
+
+        self.workspace = self.workspace.expanduser().resolve()
+        ensure_workspace_initialized(self.workspace, name="default")
 
         # Create agent
         self.agent = AgentLoop(
