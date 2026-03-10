@@ -81,6 +81,31 @@ Feature: background daemon runtime with proactive message scheduling (randomized
 - `92b52bf` feat(daemon): add daemon run --once and polling loop
 - `d84fe01` feat(agent): inject proactive brief into system context
 
+## Tool Management + CLI UX Update (2026-03-10)
+
+- [x] Investigated real runtime/session logs for tool exposure mismatch:
+  - session: `cli_4b659f78-6be0-4a7c-bb5e-969a8d22e6da`
+  - confirmed model only received `message` tool in that run.
+- [x] Changed default model-facing tools to fundamental set only:
+  - `fetch`
+  - `bash`
+- [x] Removed `message` from default model tool registration path.
+- [x] Guarded `agent.register_tool()` to reject model-facing registration of `message`.
+- [x] Updated system-prompt guidance to stop instructing model to use a `message` tool.
+- [x] Improved CLI readability with differentiated rendering:
+  - colorized user/model/tool/thinking/system labels (TTY-aware)
+  - session id rendered as dim system metadata
+  - processing indicator while waiting on model output
+- [x] Added unit coverage:
+  - `tests/test_agent_default_tools.py`
+    - default tools are exactly `fetch` + `bash`
+    - context prompt no longer instructs `message` tool usage
+    - `message` tool registration raises a model-surface error
+- [x] Validation runs:
+  - `ruff check` on modified files
+  - `pytest` targeted suite (10 tests passed)
+  - real CLI entrypoint smoke run (`python -m atom_agent`, piped `/exit`)
+
 ## Next Implementation Steps
 
 ### Phase 1: Config + Validation

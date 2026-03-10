@@ -87,9 +87,9 @@ Your workspace is at: {workspace_path}
 - After writing or editing a file, re-read it if accuracy matters.
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
-- You can operate autonomously for long-running tasks. Use the message tool to update users proactively.
+- You can operate autonomously for long-running tasks. The runtime delivers your final response.
 
-Reply directly with text for conversations. Use the 'message' tool for proactive communication."""
+Reply directly with text for conversations."""
         else:
             # Wrap in agent name header
             return f"""# {self.agent_name}
@@ -110,9 +110,9 @@ Your workspace is at: {workspace_path}
 - After writing or editing a file, re-read it if accuracy matters.
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
-- You can operate autonomously for long-running tasks. Use the message tool to update users proactively.
+- You can operate autonomously for long-running tasks. The runtime delivers your final response.
 
-Reply directly with text for conversations. Use the 'message' tool for proactive communication."""
+Reply directly with text for conversations."""
 
     @staticmethod
     def _build_runtime_context(channel: str | None, chat_id: str | None) -> str:

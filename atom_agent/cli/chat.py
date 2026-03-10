@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
+import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -56,6 +58,84 @@ class AsyncCLIChat:
         self._agent_task: asyncio.Task | None = None
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._shutdown_event = asyncio.Event()
+        self._processing_task: asyncio.Task | None = None
+        self._processing_stop: asyncio.Event | None = None
+        self._color_enabled = self._supports_color()
+
+    @staticmethod
+    def _supports_color() -> bool:
+        """Return whether ANSI colors should be used."""
+        if os.getenv("NO_COLOR"):
+            return False
+        if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+            return False
+        term = (os.getenv("TERM") or "").lower()
+        return term not in {"", "dumb"}
+
+    def _style(self, text: str, *codes: str) -> str:
+        """Apply ANSI styles when supported."""
+        if not self._color_enabled or not codes:
+            return text
+        return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+    def _system(self, text: str) -> str:
+        return self._style(text, "36", "1")
+
+    def _agent(self, text: str) -> str:
+        return self._style(text, "32", "1")
+
+    def _thinking(self, text: str) -> str:
+        return self._style(text, "35", "1")
+
+    def _tool(self, text: str) -> str:
+        return self._style(text, "33", "1")
+
+    def _user(self, text: str) -> str:
+        return self._style(text, "34", "1")
+
+    def _dim(self, text: str) -> str:
+        return self._style(text, "90")
+
+    async def _start_processing_indicator(self, session_tag: str | None = None) -> None:
+        """Start a lightweight processing hint while waiting for model output."""
+        await self._stop_processing_indicator()
+        if not self._running:
+            return
+
+        tag = session_tag or self._current_chat_id
+        stop = asyncio.Event()
+        self._processing_stop = stop
+        self._processing_task = asyncio.create_task(self._processing_indicator_loop(stop, tag))
+
+    async def _stop_processing_indicator(self) -> None:
+        """Stop processing hint if active."""
+        if self._processing_stop is not None:
+            self._processing_stop.set()
+        if self._processing_task is not None:
+            try:
+                await self._processing_task
+            except asyncio.CancelledError:
+                pass
+        self._processing_stop = None
+        self._processing_task = None
+
+    async def _processing_indicator_loop(self, stop: asyncio.Event, session_tag: str) -> None:
+        """Render an inline processing indicator."""
+        prefix = f"{self._thinking('[Thinking]')} {self._dim(f'[{session_tag}]')}"
+        if not self._color_enabled:
+            print(f"{prefix} processing...")
+            return
+
+        frames = ("|", "/", "-", "\\")
+        i = 0
+        while not stop.is_set():
+            print(f"\r{prefix} processing {frames[i % len(frames)]}", end="", flush=True)
+            i += 1
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=0.12)
+            except asyncio.TimeoutError:
+                continue
+        print("\r" + (" " * 96) + "\r", end="", flush=True)
 
     @staticmethod
     def _new_chat_id() -> str:
@@ -111,10 +191,10 @@ class AsyncCLIChat:
     def _print_welcome(self) -> None:
         """Print welcome message."""
         print("\n" + "=" * 60)
-        print(f"  {self.agent_name} - Interactive CLI Chat")
+        print(f"  {self._agent(self.agent_name)} - Interactive CLI Chat")
         print("=" * 60)
-        print(f"\nWorkspace: {self.workspace}")
-        print(f"Session:   {self._current_chat_id}")
+        print(f"\n{self._system('Workspace:')} {self.workspace}")
+        print(f"{self._system('Session:')}   {self._dim(self._current_chat_id)}")
         print("\nType your message and press Enter to chat.")
         print("Type /help to see chat, session, and workspace commands.")
         print("=" * 60 + "\n")
@@ -199,7 +279,7 @@ class AsyncCLIChat:
 
         if cmd == "/new":
             self._current_chat_id = self._new_chat_id()
-            print(f"Started new session: {self._current_chat_id}")
+            print(f"{self._system('Started new session:')} {self._dim(self._current_chat_id)}")
             return True
 
         if cmd == "/sessions":
@@ -241,14 +321,14 @@ class AsyncCLIChat:
             print("No sessions found in this workspace.")
             return
 
-        print("\nSessions:")
+        print(f"\n{self._system('Sessions:')}")
         for session in sessions:
             key = session.get("key", "")
             marker = "*" if key == self.current_session_key else " "
             sid = key.split(":", 1)[1] if ":" in key else key
             updated = session.get("updated_at", "unknown")
-            print(f" {marker} {sid}  ({updated})")
-        print(" * = current session")
+            print(f" {marker} {self._dim(sid)}  ({updated})")
+        print(f" {self._dim('* = current session')}")
 
     def _resume_session(self, session_id_or_key: str) -> None:
         """Resume an existing session by uuid or full key."""
@@ -267,7 +347,7 @@ class AsyncCLIChat:
             return
 
         self._current_chat_id = normalized.split(":", 1)[1] if ":" in normalized else normalized
-        print(f"Resumed session: {self._current_chat_id}")
+        print(f"{self._system('Resumed session:')} {self._dim(self._current_chat_id)}")
 
     def _print_dashboard(self) -> None:
         """Show workspace/session dashboard from inside chat."""
@@ -283,9 +363,9 @@ class AsyncCLIChat:
     def _print_workspace_info(self) -> None:
         """Show current workspace and session info."""
         print(
-            f"Workspace: {self.workspace}\n"
-            f"Session:   {self._current_chat_id}\n"
-            f"Key:       {self.current_session_key}"
+            f"{self._system('Workspace:')} {self.workspace}\n"
+            f"{self._system('Session:')}   {self._dim(self._current_chat_id)}\n"
+            f"{self._system('Key:')}       {self._dim(self.current_session_key)}"
         )
 
     async def _switch_workspace(self, name: str) -> None:
@@ -309,13 +389,13 @@ class AsyncCLIChat:
 
         self.workspace = entry.path
         self._current_chat_id = self._new_chat_id()
-        print(f"Switched to workspace '{name}' at {entry.path}")
-        print(f"Started new session: {self._current_chat_id}")
+        print(f"{self._system('Switched workspace:')} '{name}' at {entry.path}")
+        print(f"{self._system('Started new session:')} {self._dim(self._current_chat_id)}")
 
     def _prompt_input(self) -> str | None:
         """Blocking input prompt (called in thread)."""
         try:
-            return input("\n[You]: ")
+            return input(f"\n{self._user('[You]')}: ")
         except EOFError:
             return "/exit"
 
@@ -328,7 +408,7 @@ class AsyncCLIChat:
             content=content,
         )
         await self.bus.publish_inbound(msg)
-        print()  # Blank line before response
+        await self._start_processing_indicator(self._current_chat_id)
 
     async def _handle_output(self) -> None:
         """Handle agent output."""
@@ -341,7 +421,7 @@ class AsyncCLIChat:
                 )
 
                 # Format and display response
-                self._display_response(response)
+                await self._display_response(response)
 
             except asyncio.TimeoutError:
                 continue
@@ -351,24 +431,38 @@ class AsyncCLIChat:
                 logger.error(f"Output error: {e}")
                 await asyncio.sleep(0.1)
 
-    def _display_response(self, response: OutboundMessage) -> None:
+    async def _display_response(self, response: OutboundMessage) -> None:
         """Format and display agent response."""
         metadata = response.metadata or {}
         session_tag = response.chat_id
 
         # Handle progress updates
         if metadata.get("_progress"):
-            prefix = "  " if metadata.get("_tool_hint") else "[Thinking]: "
-            print(f"{prefix}[{session_tag}] {response.content}")
+            await self._stop_processing_indicator()
+            if metadata.get("_tool_hint"):
+                print(f"{self._tool('[Tool]')} {self._dim(f'[{session_tag}]')} {response.content}")
+            else:
+                print(
+                    f"{self._thinking('[Thinking]')} "
+                    f"{self._dim(f'[{session_tag}]')} "
+                    f"{response.content}"
+                )
+            await self._start_processing_indicator(session_tag)
             return
 
         # Regular response
+        await self._stop_processing_indicator()
         if response.content:
-            print(f"[{self.agent_name}:{session_tag}] {response.content}")
+            print(
+                f"{self._agent(f'[{self.agent_name}]')} "
+                f"{self._dim(f'[{session_tag}]')} "
+                f"{response.content}"
+            )
 
     async def _cleanup(self) -> None:
         """Cleanup resources."""
         self._running = False
+        await self._stop_processing_indicator()
 
         # Stop agent
         if self.agent:
