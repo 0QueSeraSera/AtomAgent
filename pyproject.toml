@@ -20,6 +20,8 @@ classifiers = [
 dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
+    "langchain-core",
+    "langsmith",
 ]
 
 [project.scripts]

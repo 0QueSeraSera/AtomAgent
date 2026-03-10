@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate
+
 from atom_agent.workspace import WorkspaceManager
 
 
@@ -174,6 +178,63 @@ Reply directly with text for conversations."""
             return f"## Long-term Memory\n{content}" if content else ""
         return ""
 
+    @staticmethod
+    def _dict_to_langchain_message(msg: dict[str, Any]) -> BaseMessage:
+        """Convert provider-style dict message to LangChain message object."""
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system":
+            return SystemMessage(content=content)
+        if role == "user":
+            return HumanMessage(content=content)
+        if role == "tool":
+            return ToolMessage(
+                content=content,
+                tool_call_id=msg.get("tool_call_id", ""),
+                name=msg.get("name"),
+            )
+        if role == "assistant":
+            extra: dict[str, Any] = {}
+            if msg.get("tool_calls"):
+                extra["tool_calls"] = msg["tool_calls"]
+            if msg.get("reasoning_content") is not None:
+                extra["reasoning_content"] = msg["reasoning_content"]
+            if msg.get("thinking_blocks"):
+                extra["thinking_blocks"] = msg["thinking_blocks"]
+            return AIMessage(content=content, additional_kwargs=extra)
+        return HumanMessage(content=content if content is not None else "")
+
+    @staticmethod
+    def _langchain_message_to_dict(msg: BaseMessage) -> dict[str, Any]:
+        """Convert LangChain message object back to provider-style dict."""
+        out: dict[str, Any]
+        if isinstance(msg, SystemMessage):
+            out = {"role": "system", "content": msg.content}
+        elif isinstance(msg, HumanMessage):
+            out = {"role": "user", "content": msg.content}
+        elif isinstance(msg, ToolMessage):
+            out = {
+                "role": "tool",
+                "content": msg.content,
+                "tool_call_id": msg.tool_call_id,
+            }
+            if msg.name:
+                out["name"] = msg.name
+        elif isinstance(msg, AIMessage):
+            out = {"role": "assistant", "content": msg.content}
+            tool_calls = msg.additional_kwargs.get("tool_calls")
+            if tool_calls:
+                out["tool_calls"] = tool_calls
+            reasoning_content = msg.additional_kwargs.get("reasoning_content")
+            if reasoning_content is not None:
+                out["reasoning_content"] = reasoning_content
+            thinking_blocks = msg.additional_kwargs.get("thinking_blocks")
+            if thinking_blocks:
+                out["thinking_blocks"] = thinking_blocks
+        else:
+            out = {"role": "user", "content": msg.content}
+        return out
+
     def build_messages(
         self,
         history: list[dict[str, Any]],
@@ -192,12 +253,16 @@ Reply directly with text for conversations."""
             merged = f"{runtime_ctx}\n\n{user_content}"
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
-
-        return [
-            {"role": "system", "content": self.build_system_prompt()},
-            *history,
-            {"role": "user", "content": merged},
-        ]
+        history_messages = [self._dict_to_langchain_message(m) for m in history]
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", "{system_prompt}"),
+                *history_messages,
+                HumanMessage(content=merged),
+            ]
+        )
+        lc_messages = prompt.format_messages(system_prompt=self.build_system_prompt())
+        return [self._langchain_message_to_dict(m) for m in lc_messages]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""
@@ -229,9 +294,8 @@ Reply directly with text for conversations."""
         result: str,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list."""
-        messages.append(
-            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": result}
-        )
+        tool_msg = ToolMessage(content=result, tool_call_id=tool_call_id, name=tool_name)
+        messages.append(self._langchain_message_to_dict(tool_msg))
         return messages
 
     def add_assistant_message(
@@ -243,12 +307,13 @@ Reply directly with text for conversations."""
         thinking_blocks: list[dict] | None = None,
     ) -> list[dict[str, Any]]:
         """Add an assistant message to the message list."""
-        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        extra: dict[str, Any] = {}
         if tool_calls:
-            msg["tool_calls"] = tool_calls
+            extra["tool_calls"] = tool_calls
         if reasoning_content is not None:
-            msg["reasoning_content"] = reasoning_content
+            extra["reasoning_content"] = reasoning_content
         if thinking_blocks:
-            msg["thinking_blocks"] = thinking_blocks
-        messages.append(msg)
+            extra["thinking_blocks"] = thinking_blocks
+        assistant_msg = AIMessage(content=content, additional_kwargs=extra)
+        messages.append(self._langchain_message_to_dict(assistant_msg))
         return messages

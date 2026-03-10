@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import weakref
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -25,6 +27,11 @@ if TYPE_CHECKING:
     from atom_agent.bus.events import ProactiveTask
 
 logger = get_logger("agent.loop")
+
+try:
+    from langsmith.run_helpers import trace as langsmith_trace
+except ImportError:  # pragma: no cover - optional dependency
+    langsmith_trace = None
 
 
 class AgentLoop:
@@ -234,6 +241,41 @@ class AgentLoop:
 
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
+    @staticmethod
+    def _langsmith_enabled() -> bool:
+        """Check if LangSmith tracing is enabled in env."""
+        if langsmith_trace is None:
+            return False
+        return os.environ.get("LANGSMITH_TRACING", "").lower() in ("1", "true", "yes")
+
+    @contextmanager
+    def _trace_span(
+        self,
+        *,
+        name: str,
+        run_type: str,
+        inputs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ):
+        """Create a LangSmith trace span if enabled; otherwise no-op context."""
+        if not self._langsmith_enabled():
+            yield None
+            return
+
+        project = os.environ.get("LANGSMITH_PROJECT", "atom-agent")
+        try:
+            with langsmith_trace(
+                name=name,
+                run_type=run_type,
+                project_name=project,
+                inputs=inputs,
+                metadata=metadata,
+            ) as span:
+                yield span
+        except Exception as exc:
+            logger.debug("LangSmith tracing skipped", extra={"error": str(exc), "span": name})
+            yield None
+
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
@@ -263,15 +305,43 @@ class AgentLoop:
                 extra={"iteration": iteration, "workspace": self.workspace_name},
             )
             start_time = time.perf_counter()
-
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                reasoning_effort=self.reasoning_effort,
-            )
+            tool_defs = self.tools.get_definitions()
+            with self._trace_span(
+                name="agent.llm_round",
+                run_type="llm",
+                inputs={
+                    "messages": messages,
+                    "tools": tool_defs,
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "reasoning_effort": self.reasoning_effort,
+                },
+                metadata={
+                    "iteration": iteration,
+                    "workspace": self.workspace_name,
+                },
+            ) as llm_span:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=tool_defs,
+                    model=self.model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=self.reasoning_effort,
+                )
+                if llm_span is not None:
+                    llm_span.add_outputs(
+                        {
+                            "content": response.content,
+                            "finish_reason": response.finish_reason,
+                            "usage": response.usage,
+                            "tool_calls": [
+                                {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                                for tc in response.tool_calls
+                            ],
+                        }
+                    )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
 
@@ -316,7 +386,19 @@ class AgentLoop:
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     tool_start = time.perf_counter()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    with self._trace_span(
+                        name="agent.tool_call",
+                        run_type="tool",
+                        inputs={
+                            "tool_name": tool_call.name,
+                            "arguments": tool_call.arguments,
+                            "tool_call_id": tool_call.id,
+                        },
+                        metadata={"iteration": iteration, "workspace": self.workspace_name},
+                    ) as tool_span:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                        if tool_span is not None:
+                            tool_span.add_outputs({"result": result})
                     tool_duration = (time.perf_counter() - tool_start) * 1000
                     logger.tool_call(
                         tool_name=tool_call.name,
