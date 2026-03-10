@@ -77,3 +77,9 @@ def test_gateway_once_succeeds_with_feishu_credentials(tmp_path: Path) -> None:
     assert "Feishu readiness:" in result.stdout
     assert "Starting gateway once for readiness check" in result.stdout
 
+
+def test_daemon_command_is_removed(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    result = _run_cli(["daemon", "run", "--once"], home, Path.cwd())
+    assert result.returncode != 0
+    assert "invalid choice: 'daemon'" in result.stderr
