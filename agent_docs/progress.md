@@ -1,7 +1,7 @@
 # Gateway-Centric IM Integration Progress
 
 Date: 2026-03-10
-Status: Planning Complete, Implementation Not Started
+Status: Phase 1 Commenced (Channel + Gateway Skeleton Landed)
 
 ## Current Scope
 
@@ -25,10 +25,10 @@ See: `agent_docs/plan.md`
 
 ## Execution Checklist
 
-1. [ ] Add channel runtime primitives (`channels/base.py`, `channels/manager.py`).
+1. [x] Add channel runtime primitives (`channels/base.py`, `channels/manager.py`).
 2. [ ] Implement Feishu adapter (`channels/feishu.py`) for inbound/outbound messaging.
 3. [ ] Add Feishu config validation and startup readiness checks.
-4. [ ] Add gateway runtime host (`gateway/runtime.py`) and lifecycle wiring.
+4. [x] Add gateway runtime host (`gateway/runtime.py`) and lifecycle wiring.
 5. [ ] Move proactive ticking into gateway runtime path.
 6. [ ] Add `atom-agent gateway run` command.
 7. [ ] Remove daemon package and daemon CLI command.
@@ -47,6 +47,21 @@ See: `agent_docs/plan.md`
 4. Feishu transport mode choice for v1:
    - webhook vs socket mode.
 
-## Notes
+## Implementation Notes (2026-03-10)
 
-The repository had no active `agent_docs/plan.md` or `agent_docs/progress.md` prior to this update; both are now created for this workstream.
+1. Landed channel runtime primitives:
+   - `atom_agent/channels/base.py`
+   - `atom_agent/channels/manager.py`
+   - `atom_agent/channels/__init__.py`
+2. Landed gateway runtime skeleton:
+   - `atom_agent/gateway/runtime.py`
+   - `atom_agent/gateway/__init__.py`
+3. Added tests:
+   - `tests/test_channels_manager.py`
+   - `tests/test_gateway_runtime.py`
+4. Validation run:
+   - `PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 pytest -p no:cacheprovider tests/test_channels_manager.py tests/test_gateway_runtime.py`
+   - Result: 5 passed.
+5. Commits created in this commencement pass:
+   - `0190f1e` feat(channels): add channel adapter contract and manager
+   - `17351ce` feat(gateway): add runtime host for channels and agent loop
