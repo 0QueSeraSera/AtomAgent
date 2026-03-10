@@ -1,7 +1,7 @@
 # Gateway-Centric IM Integration Progress
 
 Date: 2026-03-10
-Status: Phase 1 Commenced (Channel + Gateway Skeleton Landed)
+Status: Phase 3 In Progress (Gateway Proactive Runtime + Daemon Removal Landed)
 
 ## Current Scope
 
@@ -29,11 +29,11 @@ See: `agent_docs/plan.md`
 2. [x] Implement Feishu adapter (`channels/feishu.py`) for inbound/outbound messaging.
 3. [x] Add Feishu config validation and startup readiness checks.
 4. [x] Add gateway runtime host (`gateway/runtime.py`) and lifecycle wiring.
-5. [ ] Move proactive ticking into gateway runtime path.
+5. [x] Move proactive ticking into gateway runtime path.
 6. [x] Add `atom-agent gateway run` command.
-7. [ ] Remove daemon package and daemon CLI command.
-8. [ ] Extend proactive schema for optional explicit transport target.
-9. [ ] Update tests from daemon-focused to gateway-focused coverage (including Feishu paths).
+7. [x] Remove daemon package and daemon CLI command.
+8. [x] Extend proactive schema for optional explicit transport target.
+9. [x] Update tests from daemon-focused to gateway-focused coverage (including Feishu paths).
 10. [ ] Run real runtime verification with Feishu adapter and real model response.
 11. [x] Publish Feishu connection guide and troubleshooting in docs.
 
@@ -43,8 +43,7 @@ See: `agent_docs/plan.md`
    - final response only (default) vs optional progress relay.
 2. Channel offline behavior for proactive sends:
    - fail-fast vs retry/backoff.
-3. Exact schema shape for optional target metadata in `PROACTIVE.md`.
-4. Feishu transport mode choice for v1:
+3. Feishu transport mode choice for v1:
    - webhook vs socket mode.
 
 ## Implementation Notes (2026-03-10)
@@ -81,3 +80,23 @@ See: `agent_docs/plan.md`
 10. Real CLI readiness verification:
    - `atom-agent gateway run --once --workspace /tmp/atomagent-gw-verify-<pid>`
    - Result: gateway starts/stops and prints Feishu readiness summary.
+11. Proactive schema extension landed:
+   - `atom_agent/proactive/models.py` (`target` support on task and due models)
+   - `atom_agent/proactive/parser.py` (validation for `target.channel/chat_id/reply_to/thread_id`)
+   - `atom_agent/proactive/runtime.py` (session_key parsing + due message builder)
+   - `atom_agent/agent/context.py` and `atom_agent/cli/__main__.py` render explicit target info
+   - Commit: `f8eea88` `feat(proactive): add optional explicit target routing schema`
+12. Gateway proactive ticking migrated from daemon path:
+   - `atom_agent/gateway/runtime.py` polls `PROACTIVE.md`, evaluates due tasks, publishes to bus, persists runtime state
+   - `atom_agent/agent/loop.py` system path now preserves `session_key_override` and proactive metadata
+   - Commit: `a5ef909` `feat(gateway): run proactive polling and due-task dispatch`
+13. Daemon package and CLI command removed:
+   - deleted `atom_agent/daemon/` package
+   - removed `atom-agent daemon ...` command from `atom_agent/cli/__main__.py`
+   - removed `tests/test_daemon_service.py`, replaced coverage with gateway runtime proactive tests
+   - Commit: `914571d` `refactor(runtime): remove daemon service and CLI command`
+14. Validation run (gateway/proactive focused):
+   - `PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 ./.venv/bin/python -m pytest -p no:cacheprovider tests/test_cli_gateway.py tests/test_gateway_runtime.py tests/test_channels_feishu.py tests/test_channels_manager.py tests/test_proactive_parser.py tests/test_proactive_scheduler_state.py tests/test_proactive_runtime.py tests/test_context_proactive_brief.py tests/test_cli_proactive.py`
+   - Result: 34 passed.
+15. Real runtime verification status:
+   - pending operator-provided real Feishu credentials and real model API key.
