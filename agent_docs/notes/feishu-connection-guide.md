@@ -1,4 +1,4 @@
-# Feishu Connection Guide (Gateway v1)
+# Feishu Connection Guide (Gateway v1, Long Connection First)
 
 Date: 2026-03-10
 Scope: `atom-agent gateway run` + `atom_agent.channels.feishu.FeishuAdapter`
@@ -15,9 +15,10 @@ Scope: `atom-agent gateway run` + `atom_agent.channels.feishu.FeishuAdapter`
 
 ## 2. Required Runtime Config
 
-Set environment variables before starting gateway:
+Install SDK and set environment variables before starting gateway:
 
 ```bash
+pip install lark-oapi
 export DEEPSEEK_API_KEY=...
 export FEISHU_APP_ID=cli_xxx
 export FEISHU_APP_SECRET=xxx
@@ -30,6 +31,7 @@ Optional controls:
 export FEISHU_ALLOW_USER_IDS=ou_xxx,ou_yyy
 export FEISHU_ALLOW_GROUP_CHATS=true
 export FEISHU_DEDUP_CACHE_SIZE=1024
+export FEISHU_CONNECTION_MODE=long_connection
 ```
 
 ## 3. Start Gateway
@@ -46,9 +48,13 @@ Long-running gateway:
 atom-agent gateway run --workspace /path/to/workspace
 ```
 
-## 4. Webhook Event Handling
+`FEISHU_CONNECTION_MODE`:
+- `long_connection` (default): use Feishu WebSocket long connection (no public webhook endpoint).
+- `webhook`: use external HTTP webhook endpoint and forward events to adapter.
 
-`FeishuAdapter` exposes `handle_webhook_event(payload, headers=...)` so an external HTTP endpoint can forward raw Feishu callback payloads into AtomAgent:
+## 4. Webhook Event Handling (optional fallback)
+
+When `FEISHU_CONNECTION_MODE=webhook`, `FeishuAdapter` exposes `handle_webhook_event(payload, headers=...)` so an external HTTP endpoint can forward raw Feishu callback payloads into AtomAgent:
 
 1. Validate incoming request in your HTTP framework.
 2. Parse JSON payload.
@@ -63,7 +69,7 @@ atom-agent gateway run --workspace /path/to/workspace
 
 ## 5. Troubleshooting
 
-1. `Feishu adapter is not ready`: missing `FEISHU_APP_ID` or `FEISHU_APP_SECRET`.
-2. `verification token mismatch`: callback token does not match configured value.
+1. `Feishu adapter is not ready`: missing credentials or missing `lark-oapi` when in `long_connection` mode.
+2. `verification token mismatch`: callback token does not match configured value (`webhook` mode).
 3. No responses in group chats: verify `FEISHU_ALLOW_GROUP_CHATS=true` or pass `--feishu-deny-group` intentionally.
-4. Repeated duplicate events: expected on Feishu retries; adapter dedup cache suppresses replay.
+4. Repeated duplicate events: expected on retries; adapter dedup cache suppresses replay.

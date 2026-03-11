@@ -245,6 +245,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only allow p2p chat messages from Feishu",
     )
+    gateway_parser.add_argument(
+        "--feishu-connection-mode",
+        choices=["long_connection", "webhook"],
+        default=None,
+        help="Feishu ingress mode (fallback: FEISHU_CONNECTION_MODE, default: long_connection)",
+    )
 
     # session subcommand
     session_parser = subparsers.add_parser("session", help="Manage sessions")
@@ -553,6 +559,7 @@ def _resolve_feishu_config(args: argparse.Namespace):
     )
     signing_secret = ((args.feishu_signing_secret or env_cfg.signing_secret or "").strip() or None)
     allow_group_chats = env_cfg.allow_group_chats and not args.feishu_deny_group
+    connection_mode = (args.feishu_connection_mode or env_cfg.connection_mode).strip().lower()
 
     dedup_cache_size_raw = os.environ.get("FEISHU_DEDUP_CACHE_SIZE")
     dedup_cache_size = env_cfg.dedup_cache_size
@@ -570,6 +577,7 @@ def _resolve_feishu_config(args: argparse.Namespace):
         allow_user_ids=allow_users,
         allow_group_chats=allow_group_chats,
         dedup_cache_size=dedup_cache_size,
+        connection_mode=connection_mode,
     )
 
 
@@ -655,6 +663,7 @@ def cmd_gateway(args: argparse.Namespace) -> int:
         )
         print(f"  allow_group_chats: {feishu_cfg.allow_group_chats}")
         print(f"  allow_user_ids: {len(feishu_cfg.allow_user_ids)}")
+        print(f"  connection_mode: {feishu_cfg.connection_mode}")
 
     try:
         if args.once:

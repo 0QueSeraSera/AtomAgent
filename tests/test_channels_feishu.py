@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+import atom_agent.channels.feishu as feishu_module
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.channels import FeishuAdapter, FeishuConfig, FeishuConfigError
 
@@ -68,6 +69,7 @@ def _config(**kwargs: Any) -> FeishuConfig:
         "app_id": "cli_demo",
         "app_secret": "sec_demo",
         "verification_token": "verify-123",
+        "connection_mode": "webhook",
     }
     base.update(kwargs)
     return FeishuConfig(**base)
@@ -150,6 +152,47 @@ async def test_feishu_webhook_blocks_unallowlisted_sender() -> None:
 
 
 @pytest.mark.asyncio
+async def test_feishu_webhook_allowlist_accepts_user_id_when_open_id_present() -> None:
+    adapter = FeishuAdapter(
+        _config(allow_user_ids={"u_allowed"}),
+        client=FakeAsyncClient(),
+    )
+    await adapter.start(lambda _: None)
+
+    payload = {
+        "header": {"event_id": "evt-3", "token": "verify-123"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "ou_other", "user_id": "u_allowed"}},
+            "message": {
+                "message_id": "om_3",
+                "chat_id": "oc_chat_3",
+                "chat_type": "p2p",
+                "message_type": "text",
+                "content": json.dumps({"text": "allowed"}),
+            },
+        },
+    }
+    result = await adapter.handle_webhook_event(payload)
+    assert result["status"] == "ok"
+
+
+def test_feishu_readiness_long_connection_requires_lark_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(feishu_module, "_lark_sdk_available", lambda: False)
+    adapter = FeishuAdapter(FeishuConfig(app_id="cli_demo", app_secret="sec_demo"))
+    assert any("lark-oapi" in msg for msg in adapter.readiness_errors())
+
+
+def test_feishu_readiness_webhook_mode_does_not_require_lark_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(feishu_module, "_lark_sdk_available", lambda: False)
+    adapter = FeishuAdapter(
+        FeishuConfig(app_id="cli_demo", app_secret="sec_demo", connection_mode="webhook")
+    )
+    assert adapter.readiness_errors() == []
+
+
+@pytest.mark.asyncio
 async def test_feishu_send_fetches_token_and_reuses_cache() -> None:
     fake_client = FakeAsyncClient()
     adapter = FeishuAdapter(_config(), client=fake_client)
@@ -163,4 +206,3 @@ async def test_feishu_send_fetches_token_and_reuses_cache() -> None:
     assert fake_client.send_calls == 2
     assert fake_client.last_send_payload is not None
     assert fake_client.last_send_payload["receive_id"] == "oc_chat_3"
-

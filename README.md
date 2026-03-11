@@ -168,11 +168,15 @@ Memory is consolidated when conversations exceed the memory window.
 Gateway mode hosts the long-running agent runtime with channel adapters:
 
 ```bash
+pip install lark-oapi
 export DEEPSEEK_API_KEY=...
 export FEISHU_APP_ID=cli_xxx
 export FEISHU_APP_SECRET=xxx
 atom-agent gateway run --workspace ~/.atom-agents/workspaces/default
 ```
+
+By default Feishu runs in `long_connection` mode (WebSocket), so no webhook/public endpoint is required.
+Use `--feishu-connection-mode webhook` only if you provide your own HTTP webhook forwarder.
 
 Readiness-only startup check:
 
