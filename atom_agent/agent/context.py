@@ -10,12 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
-
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from atom_agent.memory import MemoryStore
+from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
+from atom_agent.skills import SkillsLoader
 from atom_agent.workspace import WorkspaceManager
 
 
@@ -48,6 +48,7 @@ class ContextBuilder:
         self.memory_dir = workspace / "memory"
         self._workspace_manager = WorkspaceManager(workspace)
         self._memory_store = MemoryStore(workspace)
+        self._skills_loader = SkillsLoader(workspace)
 
     def build_system_prompt(self, project_id: str | None = None) -> str:
         """Build the system prompt from identity and bootstrap files."""
@@ -144,6 +145,10 @@ Reply directly with text for conversations."""
         if proactive_brief:
             parts.append(proactive_brief)
 
+        skills_brief = self._build_skills_brief()
+        if skills_brief:
+            parts.append(skills_brief)
+
         return "\n\n".join(parts) if parts else ""
 
     def _build_proactive_brief(self) -> str:
@@ -179,6 +184,10 @@ Reply directly with text for conversations."""
     def _get_memory_context(self, project_id: str | None = None) -> str:
         """Get brief-only memory context for prompt injection."""
         return self._memory_store.build_prompt_brief(project_id=project_id)
+
+    def _build_skills_brief(self) -> str:
+        """Build compact skills summary for model context."""
+        return self._skills_loader.build_skills_summary()
 
     @staticmethod
     def _dict_to_langchain_message(msg: dict[str, Any]) -> BaseMessage:

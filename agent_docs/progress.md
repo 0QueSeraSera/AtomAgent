@@ -28,7 +28,7 @@ Plan support for MCP and skills installation/loading in worktree
   - `references/GitNexus/gitnexus-claude-plugin/skills/*`
   - `worktrees/worktree-connetct_to_IM_apps/reference/nanobot` MCP/skills implementation
 - [x] Drafted phased implementation plan in `agent_docs/plan.md`
-- [ ] Implement commit 1 (skills core loader + prompt summary)
+- [x] Implement commit 1 (skills core loader + prompt summary)
 - [ ] Implement commit 2 (skill installer CLI)
 - [ ] Implement commit 3 (MCP config + client bridge)
 - [ ] Implement commit 4 (runtime lifecycle integration)
@@ -39,3 +39,16 @@ Plan support for MCP and skills installation/loading in worktree
   - Canonical workspace MCP file: `.mcp.json`.
   - Skills based on `skills/<name>/SKILL.md`.
 - Explicitly removed GitNexus-specific implementation scope from core plan.
+
+### Commit 1 Outcome
+- Added `atom_agent.skills` module with:
+  - `SkillsLoader` (discovery, frontmatter parsing, summary builder)
+  - `SkillsManifest`/`SkillManifestEntry`/`SkillRecord` models
+- Context integration:
+  - `ContextBuilder` now injects bounded `## Skills (brief)` summary.
+  - Full `SKILL.md` bodies are not auto-injected into prompt.
+- Workspace structure:
+  - `skills/` directory is now part of initialized/validated workspace dirs.
+- Tests:
+  - Added `tests/test_skills_loader.py` (metadata parsing, load behavior, manifest filtering, prompt brief behavior).
+  - Verified `test_context_proactive_brief.py`, `test_agent_default_tools.py`, and `test_cli_management.py` still pass.
