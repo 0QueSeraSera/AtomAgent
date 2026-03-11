@@ -21,6 +21,7 @@ from atom_agent.provider.base import LLMProvider
 from atom_agent.session.manager import Session, SessionManager
 from atom_agent.tools.bash import BashTool
 from atom_agent.tools.fetch import FetchTool
+from atom_agent.tools.memory import MemoryReadTool, MemorySearchTool
 from atom_agent.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -118,6 +119,10 @@ class AgentLoop:
     def _register_default_tools(self) -> None:
         """Register the default model-facing tool set."""
         self.tools.register(FetchTool(default_timeout=30.0))
+        self.tools.register(
+            MemorySearchTool(workspace=self.workspace, default_project_id=self.workspace_name)
+        )
+        self.tools.register(MemoryReadTool(workspace=self.workspace))
         self.tools.register(
             BashTool(
                 default_timeout=60.0,

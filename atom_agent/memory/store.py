@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from atom_agent.logging import get_logger
 
@@ -74,9 +74,10 @@ class MemoryStore:
             return self.sanitize_project_id(project_id)
         return self.sanitize_project_id(self.workspace.name)
 
-    def get_project_dir(self, project_id: str | None = None) -> Path:
+    def get_project_dir(self, project_id: str | None = None, *, create: bool = True) -> Path:
         """Return project memory directory, creating it if needed."""
-        return ensure_dir(self.projects_dir / self.resolve_project_id(project_id))
+        project_dir = self.projects_dir / self.resolve_project_id(project_id)
+        return ensure_dir(project_dir) if create else project_dir
 
     def get_project_brief_path(self, project_id: str | None = None) -> Path:
         """Return BRIEF.md path for project memory."""
@@ -145,6 +146,165 @@ class MemoryStore:
                 sections.append(f"## Project Memory Brief ({resolved_project_id})\n" + project_brief)
 
         return "\n\n".join(sections).strip()
+
+    @staticmethod
+    def _safe_filename(name: str) -> str | None:
+        """Return sanitized basename if safe for local memory lookup."""
+        if not name or "/" in name or "\\" in name:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            return None
+        return name
+
+    @staticmethod
+    def _read_text(path: Path) -> str:
+        """Read text file safely with replacement for decode errors."""
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _build_snippet(text: str, terms: list[str], *, max_chars: int) -> str:
+        """Build a concise snippet around the earliest matched term."""
+        compact = " ".join(line.strip() for line in text.splitlines() if line.strip())
+        if not compact:
+            return ""
+        if len(compact) <= max_chars:
+            return compact
+
+        lower = compact.lower()
+        matches = [lower.find(term) for term in terms if term]
+        matches = [idx for idx in matches if idx >= 0]
+        start = max(0, min(matches) - (max_chars // 3)) if matches else 0
+        end = min(len(compact), start + max_chars)
+        prefix = "..." if start > 0 else ""
+        suffix = "..." if end < len(compact) else ""
+        return f"{prefix}{compact[start:end].strip()}{suffix}"
+
+    def _iter_memory_entries(
+        self,
+        *,
+        scope: str,
+        project_id: str | None = None,
+    ) -> list[tuple[str, Path]]:
+        """Collect memory entries by scope."""
+        entries: list[tuple[str, Path]] = []
+        include_global = scope in {"all", "global"}
+        include_project = scope in {"all", "project", "active_project"}
+
+        if include_global:
+            fixed = [
+                ("global:BRIEF.md", self.global_brief_file),
+                ("global:MEMORY.md", self.memory_file),
+                ("global:HISTORY.md", self.history_file),
+            ]
+            for memory_id, path in fixed:
+                if path.exists():
+                    entries.append((memory_id, path))
+
+            for path in sorted(self.global_dir.glob("*.md")):
+                if path.name == "BRIEF.md":
+                    continue
+                safe = self._safe_filename(path.name)
+                if safe:
+                    entries.append((f"global:{safe}", path))
+
+        if include_project:
+            effective_id = self.resolve_project_id(project_id)
+            project_dir = self.get_project_dir(effective_id, create=False)
+            if project_dir.exists():
+                for path in sorted(project_dir.iterdir()):
+                    if not path.is_file():
+                        continue
+                    safe = self._safe_filename(path.name)
+                    if not safe:
+                        continue
+                    entries.append((f"project:{effective_id}:{safe}", path))
+
+        return entries
+
+    def search(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        project_id: str | None = None,
+        limit: int = 5,
+        snippet_chars: int = 280,
+    ) -> list[dict[str, Any]]:
+        """Search memory entries and return ranked handles/snippets."""
+        query = query.strip()
+        terms = [term.lower() for term in re.findall(r"[A-Za-z0-9_.-]+", query) if term]
+        candidates = self._iter_memory_entries(scope=scope, project_id=project_id)
+        ranked: list[tuple[int, float, dict[str, Any]]] = []
+
+        for memory_id, path in candidates:
+            try:
+                text = self._read_text(path)
+            except OSError:
+                continue
+
+            haystack = text.lower()
+            score = sum(haystack.count(term) for term in terms) if terms else 1
+            if score <= 0:
+                continue
+
+            snippet = self._build_snippet(text, terms, max_chars=snippet_chars)
+            item = {
+                "memory_id": memory_id,
+                "title": path.name,
+                "snippet": snippet,
+            }
+            mtime = path.stat().st_mtime
+            ranked.append((score, mtime, item))
+
+        ranked.sort(key=lambda row: (-row[0], -row[1], row[2]["memory_id"]))
+        return [item for _, _, item in ranked[: max(1, min(limit, 20))]]
+
+    def resolve_memory_id(self, memory_id: str) -> Path | None:
+        """Resolve a memory handle into a file path."""
+        if memory_id.startswith("global:"):
+            filename = self._safe_filename(memory_id.split(":", 1)[1])
+            if not filename:
+                return None
+            if filename == "MEMORY.md":
+                return self.memory_file
+            if filename == "HISTORY.md":
+                return self.history_file
+            return self.global_dir / filename
+
+        if memory_id.startswith("project:"):
+            parts = memory_id.split(":", 2)
+            if len(parts) != 3:
+                return None
+            project_id = self.sanitize_project_id(parts[1])
+            filename = self._safe_filename(parts[2])
+            if not filename:
+                return None
+            return self.get_project_dir(project_id, create=False) / filename
+
+        return None
+
+    def read_entry(self, memory_id: str, *, max_chars: int = 8000) -> dict[str, Any] | None:
+        """Read a memory entry by handle, with output truncation."""
+        path = self.resolve_memory_id(memory_id)
+        if path is None or not path.exists() or not path.is_file():
+            return None
+
+        try:
+            content = self._read_text(path)
+        except OSError:
+            return None
+
+        truncated = False
+        if len(content) > max_chars:
+            content = content[:max_chars].rstrip() + "\n\n...[truncated]"
+            truncated = True
+
+        return {
+            "memory_id": memory_id,
+            "path": str(path),
+            "content": content,
+            "truncated": truncated,
+        }
 
     def read_long_term(self) -> str:
         """Read the long-term memory file."""

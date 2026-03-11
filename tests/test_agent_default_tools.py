@@ -32,16 +32,16 @@ class DummyProvider(LLMProvider):
 
 
 def test_agent_loop_registers_fetch_and_bash_by_default(tmp_path: Path) -> None:
-    """Default model-facing tools should be only bash + fetch."""
+    """Default model-facing tools should include bash/fetch + memory retrieval."""
     agent = AgentLoop(
         bus=MessageBus(),
         provider=DummyProvider(),
         workspace=tmp_path,
     )
 
-    assert agent.tools.tool_names == ["fetch", "bash"]
+    assert agent.tools.tool_names == ["fetch", "memory_search", "memory_read", "bash"]
     names = {item["function"]["name"] for item in agent.tools.get_definitions()}
-    assert names == {"fetch", "bash"}
+    assert names == {"fetch", "bash", "memory_search", "memory_read"}
     assert "message" not in names
 
 
