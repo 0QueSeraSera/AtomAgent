@@ -15,8 +15,8 @@ Usage:
     atom-agent workspace create <name> Create new workspace
     atom-agent proactive validate    Validate PROACTIVE.md configuration
     atom-agent proactive show        Show normalized proactive task summary
-    atom-agent daemon run --once    Run one proactive daemon cycle
-    atom-agent daemon run           Run daemon polling loop
+    atom-agent gateway run          Run gateway host runtime
+    atom-agent gateway run --once   Start/stop gateway once for readiness checks
 
     # Session management
     atom-agent session list          List sessions in current workspace
@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -181,31 +182,74 @@ def parse_args() -> argparse.Namespace:
         help="Workspace directory",
     )
 
-    # daemon subcommand
-    daemon_parser = subparsers.add_parser("daemon", help="Run proactive daemon service")
-    daemon_parser.add_argument(
+    # gateway subcommand
+    gateway_parser = subparsers.add_parser("gateway", help="Run gateway host runtime")
+    gateway_parser.add_argument(
         "action",
         choices=["run"],
         nargs="?",
         default="run",
         help="Action to perform",
     )
-    daemon_parser.add_argument(
+    gateway_parser.add_argument(
         "--once",
         action="store_true",
-        help="Run one daemon cycle and exit",
+        help="Start and stop gateway once after readiness checks",
     )
-    daemon_parser.add_argument(
-        "--poll-sec",
-        type=float,
-        default=30.0,
-        help="Polling interval in seconds for loop mode",
-    )
-    daemon_parser.add_argument(
-        "--workspace-path",
+    gateway_parser.add_argument(
+        "--workspace",
+        "-w",
         type=Path,
         default=None,
-        help="Optional single workspace path override",
+        help="Workspace directory",
+    )
+    gateway_parser.add_argument(
+        "--channel",
+        action="append",
+        choices=["feishu"],
+        default=[],
+        help="Enabled channel adapter (repeatable, default: feishu)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-app-id",
+        type=str,
+        default=None,
+        help="Feishu app id (fallback: FEISHU_APP_ID)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-app-secret",
+        type=str,
+        default=None,
+        help="Feishu app secret (fallback: FEISHU_APP_SECRET)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-verification-token",
+        type=str,
+        default=None,
+        help="Feishu webhook verification token (fallback: FEISHU_VERIFICATION_TOKEN)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-signing-secret",
+        type=str,
+        default=None,
+        help="Feishu webhook signing secret (fallback: FEISHU_SIGNING_SECRET)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-allow-user",
+        action="append",
+        default=[],
+        help="Allowlisted Feishu sender open_id/user_id (repeatable)",
+    )
+    gateway_parser.add_argument(
+        "--feishu-deny-group",
+        action="store_true",
+        help="Only allow p2p chat messages from Feishu",
+    )
+    gateway_parser.add_argument(
+        "--feishu-connection-mode",
+        choices=["long_connection", "webhook"],
+        default=None,
+        help="Feishu ingress mode (fallback: FEISHU_CONNECTION_MODE, default: long_connection)",
     )
 
     # session subcommand
@@ -485,17 +529,74 @@ def cmd_proactive(args: argparse.Namespace) -> int:
             jitter = f", jitter={task.jitter_sec}s" if task.jitter_sec else ""
             print(f"- {task.task_id} [{task.kind}] ({status})")
             print(f"  session_key: {task.session_key}")
+            if task.target:
+                print(f"  target: {task.target.channel}:{task.target.chat_id}")
+                if task.target.reply_to:
+                    print(f"  target.reply_to: {task.target.reply_to}")
+                if task.target.thread_id:
+                    print(f"  target.thread_id: {task.target.thread_id}")
             print(f"  schedule: {schedule}{jitter}")
         return 0
 
     return 1
 
 
-def cmd_daemon(args: argparse.Namespace) -> int:
-    """Run daemon service for proactive scheduling."""
-    from atom_agent.daemon import DaemonService
+def _resolve_feishu_config(args: argparse.Namespace):
+    from atom_agent.channels import FeishuConfig
 
-    # Subcommands usually skip logging setup in main(), so daemon configures it here.
+    env_cfg = FeishuConfig.from_env()
+
+    allow_users = set(env_cfg.allow_user_ids)
+    for value in args.feishu_allow_user or []:
+        clean = value.strip()
+        if clean:
+            allow_users.add(clean)
+
+    app_id = (args.feishu_app_id or env_cfg.app_id).strip()
+    app_secret = (args.feishu_app_secret or env_cfg.app_secret).strip()
+    verification_token = (
+        (args.feishu_verification_token or env_cfg.verification_token or "").strip() or None
+    )
+    signing_secret = ((args.feishu_signing_secret or env_cfg.signing_secret or "").strip() or None)
+    allow_group_chats = env_cfg.allow_group_chats and not args.feishu_deny_group
+    connection_mode = (args.feishu_connection_mode or env_cfg.connection_mode).strip().lower()
+
+    dedup_cache_size_raw = os.environ.get("FEISHU_DEDUP_CACHE_SIZE")
+    dedup_cache_size = env_cfg.dedup_cache_size
+    if dedup_cache_size_raw:
+        try:
+            dedup_cache_size = int(dedup_cache_size_raw)
+        except ValueError:
+            dedup_cache_size = env_cfg.dedup_cache_size
+
+    return FeishuConfig(
+        app_id=app_id,
+        app_secret=app_secret,
+        verification_token=verification_token,
+        signing_secret=signing_secret,
+        allow_user_ids=allow_users,
+        allow_group_chats=allow_group_chats,
+        dedup_cache_size=dedup_cache_size,
+        connection_mode=connection_mode,
+    )
+
+
+async def _run_gateway(runtime, *, once: bool) -> None:
+    await runtime.start()
+    try:
+        if once:
+            return
+        await asyncio.Event().wait()
+    finally:
+        await runtime.stop()
+
+
+def cmd_gateway(args: argparse.Namespace) -> int:
+    """Run gateway runtime for channel integrations."""
+    from atom_agent.channels import FeishuAdapter, FeishuConfigError
+    from atom_agent.cli.management import ensure_workspace_initialized
+    from atom_agent.gateway import GatewayRuntime
+
     config = Config.load(env_file=args.env_file)
     if args.debug:
         config.debug = True
@@ -520,43 +621,62 @@ def cmd_daemon(args: argparse.Namespace) -> int:
 
     try:
         provider = get_provider(args.provider, config)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
+    except ValueError as err:
+        print(f"Error: {err}", file=sys.stderr)
         return 1
 
-    workspace_paths = [args.workspace_path] if args.workspace_path else None
-    service = DaemonService(
+    workspace = _resolve_workspace_path(config.workspace)
+    initialized, workspace_errors = ensure_workspace_initialized(workspace, name=workspace.name)
+    if workspace_errors:
+        print(f"Error: Invalid workspace: {workspace_errors[0]}", file=sys.stderr)
+        return 1
+    if initialized:
+        print(f"ℹ Initialized workspace context files at: {workspace}")
+
+    runtime = GatewayRuntime(
         provider=provider,
+        workspace=workspace,
+        workspace_name=workspace.name,
         model=config.model,
-        poll_sec=args.poll_sec,
-        workspace_paths=workspace_paths,
     )
 
-    if args.once:
-        reports = asyncio.run(service.run_once())
-        if not reports:
-            print("No due proactive tasks.")
-            return 0
+    channels = args.channel or ["feishu"]
+    if "feishu" in channels:
+        feishu_cfg = _resolve_feishu_config(args)
+        adapter = FeishuAdapter(feishu_cfg)
+        try:
+            adapter.validate_readiness()
+        except FeishuConfigError as err:
+            print("Error: Feishu adapter is not ready.", file=sys.stderr)
+            print(f"  {err}", file=sys.stderr)
+            print(
+                "  Set FEISHU_APP_ID and FEISHU_APP_SECRET or pass --feishu-app-id/--feishu-app-secret.",
+                file=sys.stderr,
+            )
+            return 1
+        runtime.register_adapter(adapter)
+        print("Feishu readiness:")
+        print(f"  app_id: {'set' if feishu_cfg.app_id else 'missing'}")
+        print(f"  app_secret: {'set' if feishu_cfg.app_secret else 'missing'}")
+        print(
+            f"  verification_token: {'set' if feishu_cfg.verification_token else 'not_set (optional)'}"
+        )
+        print(f"  allow_group_chats: {feishu_cfg.allow_group_chats}")
+        print(f"  allow_user_ids: {len(feishu_cfg.allow_user_ids)}")
+        print(f"  connection_mode: {feishu_cfg.connection_mode}")
 
-        for report in reports:
-            if report.status == "success":
-                print(
-                    f"[{report.workspace}] {report.task_id}: success "
-                    f"(outputs={report.output_count})"
-                )
-            else:
-                print(
-                    f"[{report.workspace}] {report.task_id}: failed ({report.error})",
-                    file=sys.stderr,
-                )
-        return 1 if any(report.status != "success" for report in reports) else 0
-
-    print(f"Starting daemon loop (poll={args.poll_sec}s). Press Ctrl+C to stop.")
     try:
-        asyncio.run(service.run_forever())
+        if args.once:
+            print("Starting gateway once for readiness check...")
+        else:
+            print("Starting gateway loop. Press Ctrl+C to stop.")
+        asyncio.run(_run_gateway(runtime, once=args.once))
     except KeyboardInterrupt:
-        print("\nDaemon interrupted.")
+        print("\nGateway interrupted.")
         return 130
+    except Exception as err:
+        print(f"Error: Gateway failed to start: {err}", file=sys.stderr)
+        return 1
 
     return 0
 
@@ -660,8 +780,8 @@ def main() -> int:
         return cmd_workspace(args)
     elif args.command == "proactive":
         return cmd_proactive(args)
-    elif args.command == "daemon":
-        return cmd_daemon(args)
+    elif args.command == "gateway":
+        return cmd_gateway(args)
     elif args.command == "session":
         return cmd_session(args)
     elif args.command == "tui":

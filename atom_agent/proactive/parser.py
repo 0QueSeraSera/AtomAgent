@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from atom_agent.proactive.models import (
     ProactiveConfig,
     ProactiveTaskConfig,
+    ProactiveTarget,
     ProactiveValidationError,
     ProactiveValidationIssue,
 )
@@ -206,6 +207,8 @@ def _validate_task(
     if not isinstance(metadata, dict):
         issues.append(_issue("invalid_type", f"{path}.metadata", "Expected object."))
 
+    target = _validate_target(raw_task.get("target"), path, issues)
+
     at = None
     cron_expr = None
     every_sec = None
@@ -278,6 +281,7 @@ def _validate_task(
             kind=kind,
             session_key=session_key,
             prompt=prompt,
+            target=target,
             enabled=enabled,
             jitter_sec=jitter_sec,
             metadata=metadata,
@@ -291,3 +295,57 @@ def _validate_task(
 
 def _issue(code: str, path: str, message: str) -> ProactiveValidationIssue:
     return ProactiveValidationIssue(code=code, path=path, message=message)
+
+
+def _validate_target(
+    raw_target: object,
+    task_path: str,
+    issues: list[ProactiveValidationIssue],
+) -> ProactiveTarget | None:
+    if raw_target is None:
+        return None
+
+    path = f"{task_path}.target"
+    if not isinstance(raw_target, dict):
+        issues.append(_issue("invalid_type", path, "Expected object."))
+        return None
+
+    allowed_keys = {"channel", "chat_id", "reply_to", "thread_id"}
+    unknown_keys = sorted(set(raw_target) - allowed_keys)
+    if unknown_keys:
+        issues.append(
+            _issue(
+                "unknown_field",
+                path,
+                f"Unknown field(s): {', '.join(unknown_keys)}.",
+            )
+        )
+
+    channel = raw_target.get("channel")
+    if not isinstance(channel, str) or not channel.strip():
+        issues.append(_issue("invalid_type", f"{path}.channel", "Expected non-empty string."))
+
+    chat_id = raw_target.get("chat_id")
+    if not isinstance(chat_id, str) or not chat_id.strip():
+        issues.append(_issue("invalid_type", f"{path}.chat_id", "Expected non-empty string."))
+
+    reply_to = raw_target.get("reply_to")
+    if reply_to is not None and (not isinstance(reply_to, str) or not reply_to.strip()):
+        issues.append(_issue("invalid_type", f"{path}.reply_to", "Expected non-empty string."))
+
+    thread_id = raw_target.get("thread_id")
+    if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
+        issues.append(_issue("invalid_type", f"{path}.thread_id", "Expected non-empty string."))
+
+    if any(
+        issue.path.startswith(path)
+        for issue in issues
+    ):
+        return None
+
+    return ProactiveTarget(
+        channel=channel.strip(),
+        chat_id=chat_id.strip(),
+        reply_to=reply_to.strip() if isinstance(reply_to, str) else None,
+        thread_id=thread_id.strip() if isinstance(thread_id, str) else None,
+    )

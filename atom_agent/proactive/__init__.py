@@ -6,6 +6,7 @@ from atom_agent.proactive.models import (
     ProactiveRuntimeState,
     ProactiveTaskConfig,
     ProactiveTaskRuntimeState,
+    ProactiveTarget,
     ProactiveValidationError,
     ProactiveValidationIssue,
     TaskKind,
@@ -16,6 +17,7 @@ from atom_agent.proactive.parser import (
     validate_proactive_markdown,
 )
 from atom_agent.proactive.scheduler import evaluate_due_tasks, mark_task_finished, mark_task_started
+from atom_agent.proactive.runtime import build_due_inbound_message, parse_session_key, resolve_due_target
 from atom_agent.proactive.state import (
     get_state_dir,
     get_state_path,
@@ -30,6 +32,7 @@ __all__ = [
     "ProactiveRuntimeState",
     "ProactiveTaskConfig",
     "ProactiveTaskRuntimeState",
+    "ProactiveTarget",
     "ProactiveValidationIssue",
     "ProactiveValidationError",
     "parse_proactive_file",
@@ -38,6 +41,9 @@ __all__ = [
     "evaluate_due_tasks",
     "mark_task_started",
     "mark_task_finished",
+    "parse_session_key",
+    "resolve_due_target",
+    "build_due_inbound_message",
     "get_state_dir",
     "get_state_path",
     "load_runtime_state",

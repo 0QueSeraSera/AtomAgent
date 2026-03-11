@@ -12,6 +12,28 @@ TaskRuntimeStatus = Literal["idle", "running"]
 
 
 @dataclass(frozen=True)
+class ProactiveTarget:
+    """Explicit transport target for proactive delivery."""
+
+    channel: str
+    chat_id: str
+    reply_to: str | None = None
+    thread_id: str | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize target fields to JSON-safe dictionary."""
+        data: dict[str, str] = {
+            "channel": self.channel,
+            "chat_id": self.chat_id,
+        }
+        if self.reply_to:
+            data["reply_to"] = self.reply_to
+        if self.thread_id:
+            data["thread_id"] = self.thread_id
+        return data
+
+
+@dataclass(frozen=True)
 class ProactiveValidationIssue:
     """A structured validation issue for machine-friendly handling."""
 
@@ -44,6 +66,7 @@ class ProactiveTaskConfig:
     kind: TaskKind
     session_key: str
     prompt: str
+    target: ProactiveTarget | None = None
     enabled: bool = True
     jitter_sec: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -71,6 +94,8 @@ class ProactiveTaskConfig:
             "jitter_sec": self.jitter_sec,
             "metadata": self.metadata,
         }
+        if self.target is not None:
+            data["target"] = self.target.to_dict()
         if self.at:
             data["at"] = self.at.isoformat()
         if self.cron is not None:
@@ -197,6 +222,7 @@ class DueTask:
     kind: TaskKind
     session_key: str
     prompt: str
+    target: ProactiveTarget | None
     scheduled_time: datetime
     base_time: datetime
 

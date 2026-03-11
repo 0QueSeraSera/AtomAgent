@@ -41,7 +41,7 @@ def test_context_includes_proactive_brief_for_valid_config(tmp_path) -> None:
     prompt = ContextBuilder(workspace).build_system_prompt()
     assert "## PROACTIVE.md (brief)" in prompt
     assert "active_tasks: 1 / 1" in prompt
-    assert "daily-checkin [cron] -> cli:123" in prompt
+    assert "daily-checkin [cron] -> cli:123 (target: session_key route)" in prompt
 
 
 def test_context_shows_warning_for_invalid_proactive_config(tmp_path) -> None:

@@ -132,3 +132,65 @@ def test_once_requires_timezone_in_datetime() -> None:
 
     issue_codes = {issue.code for issue in exc.value.issues}
     assert "missing_timezone" in issue_codes
+
+
+def test_parse_task_with_explicit_target() -> None:
+    markdown = _wrap_json(
+        """{
+  "version": 1,
+  "enabled": true,
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": "route-explicit",
+      "kind": "interval",
+      "every_sec": 300,
+      "session_key": "cli:memory-1",
+      "target": {
+        "channel": "feishu",
+        "chat_id": "oc_xxx",
+        "reply_to": "om_123"
+      },
+      "prompt": "Route using explicit target."
+    }
+  ]
+}"""
+    )
+
+    config = parse_proactive_markdown(markdown)
+    task = config.tasks[0]
+    assert task.target is not None
+    assert task.target.channel == "feishu"
+    assert task.target.chat_id == "oc_xxx"
+    assert task.target.reply_to == "om_123"
+    assert task.target.thread_id is None
+
+
+def test_target_unknown_field_is_rejected() -> None:
+    markdown = _wrap_json(
+        """{
+  "version": 1,
+  "enabled": true,
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": "bad-target",
+      "kind": "interval",
+      "every_sec": 60,
+      "session_key": "cli:abc",
+      "target": {
+        "channel": "feishu",
+        "chat_id": "oc_xxx",
+        "room": "foo"
+      },
+      "prompt": "Ping"
+    }
+  ]
+}"""
+    )
+
+    with pytest.raises(ProactiveValidationError) as exc:
+        parse_proactive_markdown(markdown)
+
+    issue_codes = {issue.code for issue in exc.value.issues}
+    assert "unknown_field" in issue_codes

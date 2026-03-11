@@ -164,8 +164,12 @@ Reply directly with text for conversations."""
             f"active_tasks: {len(config.active_tasks)} / {len(config.tasks)}",
         ]
         for task in config.active_tasks:
+            target_summary = (
+                f"{task.target.channel}:{task.target.chat_id}" if task.target else "session_key route"
+            )
             lines.append(
-                f"- {task.task_id} [{task.kind}] -> {task.session_key} | {task.schedule_summary()}"
+                f"- {task.task_id} [{task.kind}] -> {task.session_key} "
+                f"(target: {target_summary}) | {task.schedule_summary()}"
             )
 
         return "## PROACTIVE.md (brief)\n\n" + "\n".join(lines)

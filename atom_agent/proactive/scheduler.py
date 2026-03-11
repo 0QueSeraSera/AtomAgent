@@ -57,6 +57,7 @@ def evaluate_due_tasks(
                     kind=task.kind,
                     session_key=task.session_key,
                     prompt=task.prompt,
+                    target=task.target,
                     scheduled_time=runtime.next_run,
                     base_time=runtime.next_base_run or runtime.next_run,
                 )
