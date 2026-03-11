@@ -15,6 +15,10 @@ Usage:
     atom-agent workspace create <name> Create new workspace
     atom-agent proactive validate    Validate PROACTIVE.md configuration
     atom-agent proactive show        Show normalized proactive task summary
+    atom-agent skill list           List installed skills
+    atom-agent skill install <path> Install skill from local path
+    atom-agent skill enable <name>  Enable skill
+    atom-agent skill disable <name> Disable skill
     atom-agent gateway run          Run gateway host runtime
     atom-agent gateway run --once   Start/stop gateway once for readiness checks
 
@@ -284,6 +288,33 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="New session key (for import)",
+    )
+
+    # skill subcommand
+    skill_parser = subparsers.add_parser("skill", help="Manage workspace skills")
+    skill_parser.add_argument(
+        "action",
+        choices=["list", "show", "install", "enable", "disable"],
+        help="Action to perform",
+    )
+    skill_parser.add_argument(
+        "value",
+        nargs="?",
+        default=None,
+        help="Skill name (show/enable/disable) or local path (install)",
+    )
+    skill_parser.add_argument(
+        "--workspace",
+        "-w",
+        type=Path,
+        default=None,
+        help="Workspace directory",
+    )
+    skill_parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Optional skill name override (install only)",
     )
 
     # tui subcommand
@@ -759,6 +790,85 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_skill(args: argparse.Namespace) -> int:
+    """Manage workspace skills."""
+    from atom_agent.cli.management import ensure_workspace_initialized
+    from atom_agent.skills import SkillInstaller, SkillsLoader
+
+    workspace = _resolve_workspace_path(args.workspace)
+    initialized, errors = ensure_workspace_initialized(workspace, name=workspace.name)
+    if errors:
+        print(f"Error: Invalid workspace: {errors[0]}", file=sys.stderr)
+        return 1
+    if initialized:
+        print(f"ℹ Initialized workspace context files at: {workspace}")
+
+    loader = SkillsLoader(workspace)
+
+    if args.action == "list":
+        skills = loader.list_skills(include_disabled=True)
+        if not skills:
+            print("No skills installed.")
+            return 0
+
+        print(f"Skills in {workspace}:")
+        for skill in skills:
+            status = "enabled" if skill.enabled else "disabled"
+            desc = skill.description if skill.description else "(no description)"
+            print(f"  - {skill.name} [{status}]")
+            print(f"    Path: {skill.path}")
+            print(f"    Description: {desc}")
+        return 0
+
+    if args.action == "show":
+        if not args.value:
+            print("Error: Skill name required", file=sys.stderr)
+            return 1
+        content = loader.load_skill(args.value)
+        if content is None:
+            print(f"Error: Skill '{args.value}' not found", file=sys.stderr)
+            return 1
+
+        skill = next(
+            (item for item in loader.list_skills(include_disabled=True) if item.name == args.value),
+            None,
+        )
+        status = "enabled" if (skill and skill.enabled) else "disabled"
+        print(f"Skill: {args.value}")
+        print(f"Status: {status}")
+        if skill is not None:
+            print(f"Path: {skill.path}")
+        print("\n---\n")
+        print(content)
+        return 0
+
+    if args.action == "install":
+        if not args.value:
+            print("Error: Local source path required", file=sys.stderr)
+            return 1
+        installer = SkillInstaller(workspace)
+        try:
+            installed = installer.install(Path(args.value), name=args.name, enabled=True)
+        except Exception as err:
+            print(f"Error: Failed to install skill: {err}", file=sys.stderr)
+            return 1
+        print(f"✓ Installed skill at: {installed}")
+        return 0
+
+    if args.action in {"enable", "disable"}:
+        if not args.value:
+            print("Error: Skill name required", file=sys.stderr)
+            return 1
+        changed = loader.set_skill_enabled(args.value, enabled=(args.action == "enable"))
+        if not changed:
+            print(f"Error: Skill '{args.value}' not found", file=sys.stderr)
+            return 1
+        print(f"✓ Skill '{args.value}' is now {'enabled' if args.action == 'enable' else 'disabled'}")
+        return 0
+
+    return 1
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     """Launch workspace/session management TUI."""
     from atom_agent.cli.management import WorkspaceSessionTUI
@@ -784,6 +894,8 @@ def main() -> int:
         return cmd_gateway(args)
     elif args.command == "session":
         return cmd_session(args)
+    elif args.command == "skill":
+        return cmd_skill(args)
     elif args.command == "tui":
         return cmd_tui(args)
 

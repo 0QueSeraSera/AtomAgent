@@ -71,6 +71,19 @@ def test_parse_file_sets_source_path(tmp_path: Path) -> None:
     assert config.tasks == []
 
 
+def test_workspace_proactive_template_is_valid() -> None:
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "atom_agent"
+        / "workspace"
+        / "templates"
+        / "PROACTIVE.md"
+    )
+    config = parse_proactive_file(template)
+    assert config.version == 1
+    assert len(config.tasks) >= 1
+
+
 def test_missing_json_block_is_rejected() -> None:
     with pytest.raises(ProactiveValidationError) as exc:
         parse_proactive_markdown("# Proactive\n\nNo JSON block here.")

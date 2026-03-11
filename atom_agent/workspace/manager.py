@@ -17,7 +17,7 @@ logger = get_logger("workspace.manager")
 BOOTSTRAP_FILES = ["IDENTITY.md", "SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md", "PROACTIVE.md"]
 
 # Required directories in a workspace
-WORKSPACE_DIRS = ["memory", "sessions"]
+WORKSPACE_DIRS = ["memory", "memory/global", "memory/projects", "sessions", "skills"]
 
 DEFAULT_MEMORY_CONTENT = "# Long-term Memory\n\n- No persistent facts recorded yet.\n"
 DEFAULT_HISTORY_CONTENT = "# Conversation History\n\n- No archived sessions yet.\n"

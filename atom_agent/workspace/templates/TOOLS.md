@@ -14,3 +14,8 @@
 - Validate external inputs
 - Handle network errors appropriately
 - Respect rate limits and quotas
+
+## Memory Retrieval Workflow
+- Keep prompts brief-first: rely on compact memory briefs in context
+- Use `memory_search` to discover relevant project/global memory handles
+- Use `memory_read` only for the entries needed to complete the current task
