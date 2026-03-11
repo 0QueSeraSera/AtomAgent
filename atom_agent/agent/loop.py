@@ -16,9 +16,11 @@ from atom_agent.agent.context import ContextBuilder
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.bus.queue import MessageBus, ProactiveScheduler
 from atom_agent.logging import get_logger, set_session_key, trace_context
+from atom_agent.mcp import MCPClientManager
 from atom_agent.memory.store import MemoryStore
 from atom_agent.provider.base import LLMProvider
 from atom_agent.session.manager import Session, SessionManager
+from atom_agent.skills import SkillsLoader
 from atom_agent.tools.bash import BashTool
 from atom_agent.tools.fetch import FetchTool
 from atom_agent.tools.memory import MemoryReadTool, MemorySearchTool
@@ -103,6 +105,7 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, agent_name)
         self.sessions = session_manager or SessionManager(workspace, self.workspace_name)
         self.tools = ToolRegistry()
+        self._mcp = self._create_mcp_manager(workspace)
         self.scheduler = ProactiveScheduler(bus)
 
         self._running = False
@@ -115,6 +118,10 @@ class AgentLoop:
         self._processing_lock = asyncio.Lock()
         self._workspace_lock = asyncio.Lock()  # Lock for workspace switching
         self._register_default_tools()
+
+    def _create_mcp_manager(self, workspace: Path) -> MCPClientManager:
+        """Create MCP manager instance bound to a workspace."""
+        return MCPClientManager(workspace=workspace, registry=self.tools)
 
     def _register_default_tools(self) -> None:
         """Register the default model-facing tool set."""
@@ -193,6 +200,9 @@ class AgentLoop:
 
                 # Create new session manager for the workspace
                 self.sessions = SessionManager(new_workspace, self.workspace_name)
+                await self._close_mcp_tools()
+                self._mcp = self._create_mcp_manager(new_workspace)
+                await self._connect_mcp_tools()
 
                 logger.info(
                     "Workspace switched",
@@ -217,6 +227,8 @@ class AgentLoop:
         Returns:
             Dict with workspace information
         """
+        skills = SkillsLoader(self.workspace).list_skills(include_disabled=True)
+        enabled_skills = sum(1 for item in skills if item.enabled)
         return {
             "path": str(self.workspace),
             "name": self.workspace_name,
@@ -224,7 +236,29 @@ class AgentLoop:
             "model": self.model,
             "sessions": len(self.sessions.list_sessions()),
             "tools": self.tools.tool_names,
+            "skills": {"installed": len(skills), "enabled": enabled_skills},
+            "mcp": {
+                "servers": self._mcp.connected_servers,
+                "tools": self._mcp.registered_tool_names,
+            },
         }
+
+    async def _connect_mcp_tools(self) -> None:
+        """Load MCP tools from workspace config."""
+        tool_names = await self._mcp.connect_from_workspace()
+        if tool_names:
+            logger.info(
+                "MCP tools loaded",
+                extra={
+                    "workspace": self.workspace_name,
+                    "mcp_servers": self._mcp.connected_servers,
+                    "mcp_tools": tool_names,
+                },
+            )
+
+    async def _close_mcp_tools(self) -> None:
+        """Unload MCP tools and close MCP sessions."""
+        await self._mcp.close()
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -454,27 +488,31 @@ class AgentLoop:
         )
         self._running = True
         await self.scheduler.start()
+        await self._connect_mcp_tools()
 
-        while self._running:
-            try:
-                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
+        try:
+            while self._running:
+                try:
+                    msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
 
-            if msg.content.strip().lower() == "/stop":
-                await self._handle_stop(msg)
-            else:
-                task = asyncio.create_task(self._dispatch(msg))
-                self._active_tasks.setdefault(msg.session_key, []).append(task)
-                task.add_done_callback(
-                    lambda t, k=msg.session_key: (
-                        self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
-                        if t in self._active_tasks.get(k, [])
-                        else None
+                if msg.content.strip().lower() == "/stop":
+                    await self._handle_stop(msg)
+                else:
+                    task = asyncio.create_task(self._dispatch(msg))
+                    self._active_tasks.setdefault(msg.session_key, []).append(task)
+                    task.add_done_callback(
+                        lambda t, k=msg.session_key: (
+                            self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                            if t in self._active_tasks.get(k, [])
+                            else None
+                        )
                     )
-                )
-
-        logger.info("Agent loop stopped")
+        finally:
+            await self._close_mcp_tools()
+            await self.scheduler.stop()
+            logger.info("Agent loop stopped")
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks for the session."""
@@ -535,8 +573,12 @@ class AgentLoop:
         """Stop the agent loop."""
         logger.info("Stop requested")
         self._running = False
-        # Stop the scheduler
-        asyncio.create_task(self.scheduler.stop())
+        # Best-effort fast shutdown path while run loop exits.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self.scheduler.stop())
 
     async def _process_message(
         self,
@@ -658,7 +700,14 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=f"📁 Workspace: {info['name']}\nPath: {info['path']}\nModel: {info['model']}\nSessions: {info['sessions']}",
+                content=(
+                    f"📁 Workspace: {info['name']}\n"
+                    f"Path: {info['path']}\n"
+                    f"Model: {info['model']}\n"
+                    f"Sessions: {info['sessions']}\n"
+                    f"Skills: {info['skills']['enabled']}/{info['skills']['installed']} enabled\n"
+                    f"MCP: {len(info['mcp']['tools'])} tools from {len(info['mcp']['servers'])} server(s)"
+                ),
             )
 
         # Background memory consolidation

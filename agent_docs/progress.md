@@ -31,7 +31,7 @@ Plan support for MCP and skills installation/loading in worktree
 - [x] Implement commit 1 (skills core loader + prompt summary)
 - [x] Implement commit 2 (skill installer CLI)
 - [x] Implement commit 3 (MCP config + client bridge)
-- [ ] Implement commit 4 (runtime lifecycle integration)
+- [x] Implement commit 4 (runtime lifecycle integration)
 
 ### Scope Update
 - Plan refined to be AtomAgent-generic and standards-aligned:
@@ -93,3 +93,21 @@ Plan support for MCP and skills installation/loading in worktree
   - `tests/test_tools_mcp.py`
   - `tests/test_mcp_client.py`
   - Regression suite re-run with skills/context/CLI tests (all passing)
+
+### Commit 4 Outcome
+- Integrated MCP lifecycle into `AgentLoop`:
+  - Startup: `run()` now loads MCP tools from workspace `.mcp.json`.
+  - Shutdown: `run()` teardown now closes MCP sessions and unregisters MCP tools.
+  - Workspace switch: `switch_workspace()` now unloads old MCP tools/sessions and reloads MCP for the new workspace.
+- Enhanced workspace introspection:
+  - `get_workspace_info()` now includes:
+    - skills counts (`installed`, `enabled`)
+    - MCP runtime state (`servers`, `tools`)
+- Updated `/workspace` command response to show skill/MCP status summary.
+- Added lifecycle tests:
+  - `tests/test_agent_mcp_lifecycle.py`
+    - run() startup/shutdown MCP integration
+    - workspace switch MCP reload behavior
+    - workspace info includes skills + MCP data
+- Verification:
+  - Full targeted suite for commits 1-4 passed (31 tests).
