@@ -7,10 +7,12 @@ MVP for self-improvement orchestration + progressive memory in worktree `worktre
 
 ### Status
 - [x] Drafted implementation plan
-- [ ] Commit 1: project-scoped memory + brief-first context
-- [ ] Commit 2: memory_search/memory_read tools
-- [ ] Commit 3: proactive template/docs/tests
+- [x] Commit 1: project-scoped memory + brief-first context
+- [x] Commit 2: memory_search/memory_read tools
+- [x] Commit 3: proactive template/docs/tests
 
 ### Notes
 - Design constraint accepted: do not hard-code self-improvement behavior into agent loop.
 - Preferred control surface: proactive task + explicit tool invocation.
+- Commit `63c647c`: project-scoped memory layout + brief-first context injection.
+- Commit `5f8d052`: progressive `memory_search` and `memory_read` tools.
