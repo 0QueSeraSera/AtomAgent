@@ -287,6 +287,36 @@ class AgentLoop:
             return False
         return os.environ.get("LANGSMITH_TRACING", "").lower() in ("1", "true", "yes")
 
+    @staticmethod
+    def _langsmith_project_name() -> str:
+        """Resolve LangSmith project name with a stable default."""
+        project = os.environ.get("LANGSMITH_PROJECT", "atom-agent")
+        if not isinstance(project, str):
+            return "atom-agent"
+        project = project.strip()
+        return project or "atom-agent"
+
+    def _build_langsmith_thread_metadata(
+        self,
+        *,
+        session_key: str,
+        project_id: str | None,
+    ) -> dict[str, Any]:
+        """Build thread metadata for LangSmith spans.
+
+        Session ids are scoped by:
+        1) LangSmith project name
+        2) Logical project scope (`project_id` or workspace)
+        3) Session key (channel/chat pair)
+        """
+        project_scope = project_id or self.workspace_name
+        session_id = f"{self._langsmith_project_name()}:{project_scope}:{session_key}"
+        return {
+            "session_id": session_id,
+            "atom_session_key": session_key,
+            "atom_project_scope": project_scope,
+        }
+
     @contextmanager
     def _trace_span(
         self,
@@ -301,7 +331,7 @@ class AgentLoop:
             yield None
             return
 
-        project = os.environ.get("LANGSMITH_PROJECT", "atom-agent")
+        project = self._langsmith_project_name()
         try:
             with langsmith_trace(
                 name=name,
@@ -319,6 +349,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        trace_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages)."""
         messages = initial_messages
@@ -357,6 +388,7 @@ class AgentLoop:
                     "reasoning_effort": self.reasoning_effort,
                 },
                 metadata={
+                    **(trace_metadata or {}),
                     "iteration": iteration,
                     "workspace": self.workspace_name,
                 },
@@ -433,7 +465,11 @@ class AgentLoop:
                             "arguments": tool_call.arguments,
                             "tool_call_id": tool_call.id,
                         },
-                        metadata={"iteration": iteration, "workspace": self.workspace_name},
+                        metadata={
+                            **(trace_metadata or {}),
+                            "iteration": iteration,
+                            "workspace": self.workspace_name,
+                        },
                     ) as tool_span:
                         result = await self.tools.execute(tool_call.name, tool_call.arguments)
                         if tool_span is not None:
@@ -615,7 +651,14 @@ class AgentLoop:
                 chat_id=chat_id,
                 project_id=project_id,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            trace_meta = self._build_langsmith_thread_metadata(
+                session_key=key,
+                project_id=project_id,
+            )
+            final_content, _, all_msgs = await self._run_agent_loop(
+                messages,
+                trace_metadata=trace_meta,
+            )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(
@@ -641,7 +684,14 @@ class AgentLoop:
                 chat_id=msg.chat_id,
                 project_id=project_id,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            trace_meta = self._build_langsmith_thread_metadata(
+                session_key=key,
+                project_id=project_id,
+            )
+            final_content, _, all_msgs = await self._run_agent_loop(
+                messages,
+                trace_metadata=trace_meta,
+            )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(
@@ -752,8 +802,14 @@ class AgentLoop:
                 )
             )
 
+        trace_meta = self._build_langsmith_thread_metadata(
+            session_key=key,
+            project_id=project_id,
+        )
         final_content, _, all_msgs = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress
+            initial_messages,
+            on_progress=on_progress or _bus_progress,
+            trace_metadata=trace_meta,
         )
 
         if final_content is None:
