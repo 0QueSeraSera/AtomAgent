@@ -29,8 +29,8 @@ Plan support for MCP and skills installation/loading in worktree
   - `worktrees/worktree-connetct_to_IM_apps/reference/nanobot` MCP/skills implementation
 - [x] Drafted phased implementation plan in `agent_docs/plan.md`
 - [x] Implement commit 1 (skills core loader + prompt summary)
-- [ ] Implement commit 2 (skill installer CLI)
-- [ ] Implement commit 3 (MCP config + client bridge)
+- [x] Implement commit 2 (skill installer CLI)
+- [x] Implement commit 3 (MCP config + client bridge)
 - [ ] Implement commit 4 (runtime lifecycle integration)
 
 ### Scope Update
@@ -52,3 +52,44 @@ Plan support for MCP and skills installation/loading in worktree
 - Tests:
   - Added `tests/test_skills_loader.py` (metadata parsing, load behavior, manifest filtering, prompt brief behavior).
   - Verified `test_context_proactive_brief.py`, `test_agent_default_tools.py`, and `test_cli_management.py` still pass.
+
+### Commit 2 Outcome
+- Added local skill installer:
+  - `atom_agent.skills.SkillInstaller` installs from local folder or `SKILL.md` file.
+  - Maintains `skills/manifest.json` with enabled state + install source/timestamp.
+- Added CLI commands:
+  - `atom-agent skill list`
+  - `atom-agent skill show <name>`
+  - `atom-agent skill install <path> [--name <skill_name>]`
+  - `atom-agent skill enable <name>`
+  - `atom-agent skill disable <name>`
+- Added manifest enable/disable support in `SkillsLoader`.
+- Tests:
+  - Added `tests/test_cli_skills.py` for install/list/show/enable/disable flows.
+  - Verified passing suites:
+    - `tests/test_skills_loader.py`
+    - `tests/test_cli_skills.py`
+    - `tests/test_cli_management.py`
+    - `tests/test_context_proactive_brief.py`
+    - `tests/test_agent_default_tools.py`
+
+### Commit 3 Outcome
+- Added MCP config/models package:
+  - `atom_agent.mcp.models` (`MCPConfig`, `MCPServerConfig`, validation error/issue types)
+  - `atom_agent.mcp.config` (`parse_mcp_json`, `load_workspace_mcp_config`, `.mcp.json` support)
+- Added MCP runtime bridge:
+  - `atom_agent.mcp.client.MCPClientManager`
+  - Connects enabled servers from config (stdio transport in this iteration)
+  - Discovers remote tools and registers wrapped model-facing tools into `ToolRegistry`
+  - Gracefully skips unsupported transports and missing MCP SDK/import failures
+- Added MCP tool wrapper:
+  - `atom_agent.tools.mcp.MCPTool`
+  - Tool naming convention: `mcp_<server>_<tool>`
+  - Timeout/error handling and response formatting for mixed MCP result blocks
+- Export updates:
+  - `atom_agent.mcp.__init__` and `atom_agent.tools.__init__`
+- Tests:
+  - `tests/test_mcp_config.py`
+  - `tests/test_tools_mcp.py`
+  - `tests/test_mcp_client.py`
+  - Regression suite re-run with skills/context/CLI tests (all passing)

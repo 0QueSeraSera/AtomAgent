@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from atom_agent.skills.models import SkillRecord, SkillsManifest
+from atom_agent.skills.models import SkillManifestEntry, SkillRecord, SkillsManifest
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 
@@ -102,6 +102,30 @@ class SkillsLoader:
             return SkillsManifest.from_dict(data)
         except Exception:
             return SkillsManifest()
+
+    def save_manifest(self, manifest: SkillsManifest) -> None:
+        """Persist manifest to disk."""
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.manifest_path.write_text(
+            json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def set_skill_enabled(self, name: str, enabled: bool) -> bool:
+        """Enable/disable a discovered skill by name."""
+        known = {item.name for item in self.list_skills(include_disabled=True)}
+        if name not in known:
+            return False
+
+        manifest = self.load_manifest()
+        entry = manifest.skills.get(name)
+        if entry is None:
+            entry = SkillManifestEntry(enabled=enabled)
+        else:
+            entry.enabled = enabled
+        manifest.skills[name] = entry
+        self.save_manifest(manifest)
+        return True
 
     @staticmethod
     def _strip_frontmatter(content: str) -> str:
