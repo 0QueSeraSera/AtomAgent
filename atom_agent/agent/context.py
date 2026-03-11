@@ -15,6 +15,7 @@ from atom_agent.proactive import ProactiveValidationError, parse_proactive_file
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 
+from atom_agent.memory import MemoryStore
 from atom_agent.workspace import WorkspaceManager
 
 
@@ -46,8 +47,9 @@ class ContextBuilder:
         self.agent_name = agent_name
         self.memory_dir = workspace / "memory"
         self._workspace_manager = WorkspaceManager(workspace)
+        self._memory_store = MemoryStore(workspace)
 
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, project_id: str | None = None) -> str:
         """Build the system prompt from identity and bootstrap files."""
         parts = [self._get_identity()]
 
@@ -55,7 +57,7 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self._get_memory_context()
+        memory = self._get_memory_context(project_id=project_id)
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
@@ -174,13 +176,9 @@ Reply directly with text for conversations."""
 
         return "## PROACTIVE.md (brief)\n\n" + "\n".join(lines)
 
-    def _get_memory_context(self) -> str:
-        """Get the memory context from MEMORY.md."""
-        memory_file = self.memory_dir / "MEMORY.md"
-        if memory_file.exists():
-            content = memory_file.read_text(encoding="utf-8")
-            return f"## Long-term Memory\n{content}" if content else ""
-        return ""
+    def _get_memory_context(self, project_id: str | None = None) -> str:
+        """Get brief-only memory context for prompt injection."""
+        return self._memory_store.build_prompt_brief(project_id=project_id)
 
     @staticmethod
     def _dict_to_langchain_message(msg: dict[str, Any]) -> BaseMessage:
@@ -246,6 +244,7 @@ Reply directly with text for conversations."""
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id)
@@ -265,7 +264,7 @@ Reply directly with text for conversations."""
                 HumanMessage(content=merged),
             ]
         )
-        lc_messages = prompt.format_messages(system_prompt=self.build_system_prompt())
+        lc_messages = prompt.format_messages(system_prompt=self.build_system_prompt(project_id))
         return [self._langchain_message_to_dict(m) for m in lc_messages]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:

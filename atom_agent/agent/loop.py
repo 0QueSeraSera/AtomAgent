@@ -543,6 +543,11 @@ class AgentLoop:
         # Set session key for logging context
         key = session_key or msg.session_key
         set_session_key(key)
+        metadata = msg.metadata if isinstance(msg.metadata, dict) else {}
+        raw_project_id = metadata.get("project_id")
+        project_id = raw_project_id.strip() if isinstance(raw_project_id, str) else None
+        if project_id == "":
+            project_id = None
 
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -561,6 +566,7 @@ class AgentLoop:
                 current_message=msg.content,
                 channel=channel,
                 chat_id=chat_id,
+                project_id=project_id,
             )
             final_content, _, all_msgs = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
@@ -586,6 +592,7 @@ class AgentLoop:
                 current_message=msg.content,
                 channel=msg.channel,
                 chat_id=msg.chat_id,
+                project_id=project_id,
             )
             final_content, _, all_msgs = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
@@ -675,6 +682,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            project_id=project_id,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

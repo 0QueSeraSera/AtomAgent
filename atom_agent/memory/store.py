@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,9 +53,98 @@ class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
 
     def __init__(self, workspace: Path):
+        self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
+        self.global_dir = ensure_dir(self.memory_dir / "global")
+        self.projects_dir = ensure_dir(self.memory_dir / "projects")
+        self.global_brief_file = self.global_dir / "BRIEF.md"
+
+    @staticmethod
+    def sanitize_project_id(project_id: str) -> str:
+        """Normalize project id into a safe directory name."""
+        normalized = re.sub(r"[^a-zA-Z0-9._-]+", "-", project_id.strip())
+        normalized = normalized.strip("-._")
+        return normalized[:80] if normalized else "default"
+
+    def resolve_project_id(self, project_id: str | None = None) -> str:
+        """Resolve project id from explicit value or workspace name."""
+        if project_id and project_id.strip():
+            return self.sanitize_project_id(project_id)
+        return self.sanitize_project_id(self.workspace.name)
+
+    def get_project_dir(self, project_id: str | None = None) -> Path:
+        """Return project memory directory, creating it if needed."""
+        return ensure_dir(self.projects_dir / self.resolve_project_id(project_id))
+
+    def get_project_brief_path(self, project_id: str | None = None) -> Path:
+        """Return BRIEF.md path for project memory."""
+        return self.get_project_dir(project_id) / "BRIEF.md"
+
+    def read_global_brief(self) -> str:
+        """Read global brief, falling back to legacy MEMORY.md."""
+        if self.global_brief_file.exists():
+            return self.global_brief_file.read_text(encoding="utf-8")
+        return self.read_long_term()
+
+    def read_project_brief(self, project_id: str | None = None) -> str:
+        """Read project brief markdown."""
+        brief_path = self.get_project_brief_path(project_id)
+        if brief_path.exists():
+            return brief_path.read_text(encoding="utf-8")
+        return ""
+
+    @staticmethod
+    def _compact_markdown(text: str, *, max_lines: int, max_chars: int) -> str:
+        """Compact markdown text into a bounded brief for prompt usage."""
+        lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        compact: list[str] = []
+        total_chars = 0
+        for line in lines:
+            if len(compact) >= max_lines:
+                break
+            line_chars = len(line)
+            if total_chars + line_chars > max_chars:
+                remaining = max_chars - total_chars
+                if remaining > 24:
+                    compact.append(line[:remaining].rstrip() + "...")
+                break
+            compact.append(line)
+            total_chars += line_chars
+
+        return "\n".join(compact).strip()
+
+    def build_prompt_brief(self, project_id: str | None = None) -> str:
+        """
+        Build brief-only memory context for prompt injection.
+
+        This intentionally avoids injecting full project memory content.
+        """
+        sections: list[str] = []
+
+        global_brief = self._compact_markdown(
+            self.read_global_brief(),
+            max_lines=12,
+            max_chars=1800,
+        )
+        if global_brief:
+            sections.append("## Global Memory Brief\n" + global_brief)
+
+        resolved_project_id = self.resolve_project_id(project_id) if project_id else None
+        if resolved_project_id:
+            project_brief = self._compact_markdown(
+                self.read_project_brief(resolved_project_id),
+                max_lines=14,
+                max_chars=2200,
+            )
+            if project_brief:
+                sections.append(f"## Project Memory Brief ({resolved_project_id})\n" + project_brief)
+
+        return "\n\n".join(sections).strip()
 
     def read_long_term(self) -> str:
         """Read the long-term memory file."""
