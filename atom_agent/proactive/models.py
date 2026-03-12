@@ -73,6 +73,9 @@ class ProactiveTaskConfig:
     at: datetime | None = None
     cron: str | None = None
     every_sec: int | None = None
+    # Chitchat mode configuration
+    chitchat_mode: bool = False
+    chitchat_context: dict[str, Any] = field(default_factory=dict)
 
     def schedule_summary(self) -> str:
         """Human-readable schedule summary."""
@@ -93,6 +96,8 @@ class ProactiveTaskConfig:
             "enabled": self.enabled,
             "jitter_sec": self.jitter_sec,
             "metadata": self.metadata,
+            "chitchat_mode": self.chitchat_mode,
+            "chitchat_context": self.chitchat_context,
         }
         if self.target is not None:
             data["target"] = self.target.to_dict()
@@ -225,6 +230,8 @@ class DueTask:
     target: ProactiveTarget | None
     scheduled_time: datetime
     base_time: datetime
+    chitchat_mode: bool = False
+    chitchat_context: dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_dt(value: Any) -> datetime | None:

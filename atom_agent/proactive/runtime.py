@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from atom_agent.bus.events import InboundMessage
 from atom_agent.proactive.models import DueTask
+
+if TYPE_CHECKING:
+    from atom_agent.proactive.chitchat import ChitchatGenerator
 
 
 def parse_session_key(session_key: str) -> tuple[str, str]:
@@ -45,11 +48,76 @@ def build_due_inbound_message(due: DueTask) -> InboundMessage:
         "base_time": due.base_time.isoformat(),
         **target_metadata,
     }
+
+    # Add chitchat metadata if enabled
+    if due.chitchat_mode:
+        metadata["chitchat_mode"] = True
+        metadata["chitchat_context"] = due.chitchat_context
+
     return InboundMessage(
         channel="system",
         sender_id=f"proactive:{due.task_id}",
         chat_id=f"{channel}:{chat_id}",
         content=due.prompt,
+        metadata=metadata,
+        session_key_override=due.session_key,
+        priority="high",
+    )
+
+
+async def build_chitchat_inbound_message(
+    due: DueTask,
+    chitchat_generator: ChitchatGenerator | None = None,
+) -> InboundMessage:
+    """
+    Build message with LLM-generated chitchat content.
+
+    If chitchat_generator is provided, generates contextual chitchat.
+    Otherwise, falls back to static prompt.
+
+    Args:
+        due: The due task with chitchat configuration
+        chitchat_generator: Optional generator for LLM-based content
+
+    Returns:
+        InboundMessage with generated or static content
+    """
+    from atom_agent.proactive.chitchat import ChitchatContext
+
+    channel, chat_id, target_metadata = resolve_due_target(due)
+
+    # Generate chitchat content if generator is available
+    if chitchat_generator is not None:
+        # Build context from memory
+        context = await chitchat_generator.build_context_from_memory(
+            chat_id=chat_id,
+            session_key=due.session_key,
+            chitchat_config=due.chitchat_context,
+        )
+
+        # Generate chitchat message
+        content = await chitchat_generator.generate_chitchat(
+            context=context,
+            base_prompt=due.prompt,
+        )
+    else:
+        # Fallback to static prompt
+        content = due.prompt
+
+    metadata: dict[str, Any] = {
+        "task_id": due.task_id,
+        "proactive": True,
+        "chitchat_mode": True,
+        "scheduled_time": due.scheduled_time.isoformat(),
+        "base_time": due.base_time.isoformat(),
+        **target_metadata,
+    }
+
+    return InboundMessage(
+        channel="system",
+        sender_id=f"proactive:{due.task_id}",
+        chat_id=f"{channel}:{chat_id}",
+        content=content,
         metadata=metadata,
         session_key_override=due.session_key,
         priority="high",

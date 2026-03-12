@@ -272,6 +272,15 @@ def _validate_task(
                 )
             )
 
+    # Parse chitchat configuration
+    chitchat_mode = raw_task.get("chitchat_mode", False)
+    if not isinstance(chitchat_mode, bool):
+        issues.append(_issue("invalid_type", f"{path}.chitchat_mode", "Expected boolean."))
+
+    chitchat_context = raw_task.get("chitchat_context", {})
+    if not isinstance(chitchat_context, dict):
+        issues.append(_issue("invalid_type", f"{path}.chitchat_context", "Expected object."))
+
     if issues:
         return None, issues
 
@@ -288,6 +297,8 @@ def _validate_task(
             at=at,
             cron=cron_expr,
             every_sec=every_sec,
+            chitchat_mode=chitchat_mode,
+            chitchat_context=chitchat_context,
         ),
         [],
     )

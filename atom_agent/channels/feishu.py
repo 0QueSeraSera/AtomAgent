@@ -11,13 +11,16 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import httpx
 
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.channels.base import ChannelAdapter, InboundCallback
 from atom_agent.logging import get_logger
+
+if TYPE_CHECKING:
+    from atom_agent.channels.feishu_session import FeishuSessionRouter
 
 logger = get_logger("channels.feishu")
 
@@ -105,6 +108,9 @@ class FeishuAdapter(ChannelAdapter):
 
         self._seen_ids: OrderedDict[str, None] = OrderedDict()
 
+        # Session router for chitchat/normal routing
+        self._session_router: FeishuSessionRouter | None = None
+
     def readiness_errors(self) -> list[str]:
         """Return readiness validation errors."""
         errors: list[str] = []
@@ -128,6 +134,11 @@ class FeishuAdapter(ChannelAdapter):
         errors = self.readiness_errors()
         if errors:
             raise FeishuConfigError(" ".join(errors))
+
+    def set_session_router(self, router: FeishuSessionRouter) -> None:
+        """Attach session router for chitchat/normal routing."""
+        self._session_router = router
+        logger.info("Feishu session router attached")
 
     async def start(self, on_inbound: InboundCallback) -> None:
         """Start adapter runtime."""
@@ -238,23 +249,76 @@ class FeishuAdapter(ChannelAdapter):
         if not content:
             return {"status": "ignored", "reason": "empty_content"}
 
+        # Build base metadata
+        base_metadata = {
+            "event_id": event_id,
+            "message_id": message_id,
+            "chat_type": chat_type,
+            "message_type": message_type,
+            "sender_ids": sender_ids,
+        }
+
+        # Route through session router
+        session_key, routed_metadata = self._route_inbound_message(chat_id, content, base_metadata)
+
         inbound = InboundMessage(
             channel="feishu",
             sender_id=sender_id or "unknown",
             chat_id=chat_id,
             content=content,
-            metadata={
-                "event_id": event_id,
-                "message_id": message_id,
-                "chat_type": chat_type,
-                "message_type": message_type,
-                "sender_ids": sender_ids,
-            },
+            metadata=routed_metadata,
+            session_key_override=session_key,
         )
 
         await self._publish_inbound(inbound, source="webhook")
 
         return {"status": "ok", "event_id": event_id, "message_id": message_id}
+
+    def _route_inbound_message(
+        self,
+        chat_id: str,
+        content: str,
+        base_metadata: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        """
+        Route inbound message through session router if available.
+
+        Checks for /next_time command to end chitchat sessions.
+        Routes to appropriate session (chitchat vs normal) based on current state.
+
+        Args:
+            chat_id: The Feishu chat ID
+            content: The message content
+            base_metadata: Base metadata for the message
+
+        Returns:
+            Tuple of (session_key, modified_metadata)
+        """
+        metadata = dict(base_metadata)
+
+        # Check for /next_time command to end chitchat
+        if content.strip().lower() == "/next_time":
+            if self._session_router is not None:
+                ended = self._session_router.end_chitchat(chat_id)
+                if ended:
+                    metadata["chitchat_ended"] = True
+                    logger.info(
+                        "Chitchat ended via /next_time command",
+                        extra={"chat_id": chat_id},
+                    )
+            # Route to normal session
+            return f"feishu:{chat_id}", metadata
+
+        # Route through session router if available
+        if self._session_router is not None:
+            session_key = self._session_router.get_session_key(chat_id)
+            if self._session_router.is_in_chitchat(chat_id):
+                metadata["chitchat_active"] = True
+                self._session_router.record_chitchat_message(chat_id)
+            return session_key, metadata
+
+        # Default routing without session router
+        return f"feishu:{chat_id}", metadata
 
     async def _publish_inbound(self, inbound: InboundMessage, *, source: str) -> None:
         if self._on_inbound is not None:
@@ -346,17 +410,24 @@ class FeishuAdapter(ChannelAdapter):
         if not content:
             return
 
+        # Build base metadata
+        base_metadata = {
+            "message_id": message_id,
+            "chat_type": chat_type,
+            "message_type": message_type,
+            "sender_ids": sender_ids,
+        }
+
+        # Route through session router
+        session_key, routed_metadata = self._route_inbound_message(chat_id, content, base_metadata)
+
         inbound = InboundMessage(
             channel="feishu",
             sender_id=sender_id or "unknown",
             chat_id=chat_id,
             content=content,
-            metadata={
-                "message_id": message_id,
-                "chat_type": chat_type,
-                "message_type": message_type,
-                "sender_ids": sender_ids,
-            },
+            metadata=routed_metadata,
+            session_key_override=session_key,
         )
         await self._publish_inbound(inbound, source="long_connection")
 

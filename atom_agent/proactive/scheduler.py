@@ -60,6 +60,8 @@ def evaluate_due_tasks(
                     target=task.target,
                     scheduled_time=runtime.next_run,
                     base_time=runtime.next_base_run or runtime.next_run,
+                    chitchat_mode=task.chitchat_mode,
+                    chitchat_context=task.chitchat_context,
                 )
             )
 

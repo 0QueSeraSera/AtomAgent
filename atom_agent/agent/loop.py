@@ -759,6 +759,22 @@ class AgentLoop:
                     f"MCP: {len(info['mcp']['tools'])} tools from {len(info['mcp']['servers'])} server(s)"
                 ),
             )
+        if cmd == "/next_time":
+            # Handle chitchat session end
+            metadata = msg.metadata if isinstance(msg.metadata, dict) else {}
+            chitchat_ended = metadata.get("chitchat_ended", False)
+            if chitchat_ended:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Got it! Let's chat again next time. Feel free to reach out whenever you need help. 😊",
+                )
+            # Not in a chitchat session, just acknowledge
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Sure, I'll be here when you need me!",
+            )
 
         # Background memory consolidation
         unconsolidated = len(session.messages) - session.last_consolidated
