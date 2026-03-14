@@ -625,6 +625,7 @@ async def _run_gateway(runtime, *, once: bool) -> None:
 def cmd_gateway(args: argparse.Namespace) -> int:
     """Run gateway runtime for channel integrations."""
     from atom_agent.channels import FeishuAdapter, FeishuConfigError
+    from atom_agent.channels.feishu_session import FeishuSessionRouter
     from atom_agent.cli.management import ensure_workspace_initialized
     from atom_agent.gateway import GatewayRuntime
 
@@ -685,6 +686,8 @@ def cmd_gateway(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        session_router = FeishuSessionRouter(workspace=workspace)
+        adapter.set_session_router(session_router)
         runtime.register_adapter(adapter)
         print("Feishu readiness:")
         print(f"  app_id: {'set' if feishu_cfg.app_id else 'missing'}")
@@ -695,6 +698,8 @@ def cmd_gateway(args: argparse.Namespace) -> int:
         print(f"  allow_group_chats: {feishu_cfg.allow_group_chats}")
         print(f"  allow_user_ids: {len(feishu_cfg.allow_user_ids)}")
         print(f"  connection_mode: {feishu_cfg.connection_mode}")
+        if session_router.state_path is not None:
+            print(f"  session_state: {session_router.state_path}")
 
     try:
         if args.once:

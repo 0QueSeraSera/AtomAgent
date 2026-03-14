@@ -18,6 +18,7 @@ from atom_agent.proactive import (
     mark_task_finished,
     mark_task_started,
     parse_proactive_file,
+    resolve_due_target,
     save_runtime_state,
 )
 from atom_agent.provider.base import LLMProvider
@@ -206,7 +207,28 @@ class GatewayRuntime:
             mark_task_started(state, due, started_at=datetime.now())
             save_runtime_state(self.workspace, state)
             try:
+                session_override = self._resolve_proactive_session_override(due)
+                if session_override is None:
+                    mark_task_finished(
+                        task,
+                        state,
+                        timezone_name=config.timezone,
+                        finished_at=datetime.now(),
+                        success=True,
+                    )
+                    logger.info(
+                        "Proactive task suppressed",
+                        extra={
+                            "workspace": self.workspace_name,
+                            "task_id": due.task_id,
+                            "reason": "feishu_chitchat_disabled",
+                        },
+                    )
+                    continue
+
                 message = build_due_inbound_message(due)
+                if session_override:
+                    message.session_key_override = session_override
                 await self.bus.publish_inbound(message)
                 mark_task_finished(
                     task,
@@ -239,6 +261,28 @@ class GatewayRuntime:
                 )
             finally:
                 save_runtime_state(self.workspace, state)
+
+    def _resolve_proactive_session_override(self, due) -> str | None:
+        """
+        Resolve channel-specific proactive memory session override.
+
+        Returns:
+            - explicit session key override string when channel wants custom memory scope
+            - None when proactive delivery should be suppressed
+            - empty string when no override is needed
+        """
+        channel, chat_id, _ = resolve_due_target(due)
+        if channel != "feishu" or not due.chitchat_mode:
+            return ""
+
+        for adapter in self.channels.adapters():
+            if adapter.channel != "feishu":
+                continue
+            resolver = getattr(adapter, "resolve_proactive_session_key", None)
+            if not callable(resolver):
+                return ""
+            return resolver(chat_id=chat_id, chitchat_mode=True) or None
+        return ""
 
     async def __aenter__(self) -> "GatewayRuntime":
         await self.start()

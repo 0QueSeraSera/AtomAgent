@@ -65,6 +65,20 @@ class FakeAdapter(ChannelAdapter):
         await self.inbound_cb(message)
 
 
+@dataclass
+class FakeFeishuSessionAdapter(FakeAdapter):
+    """Feishu-like adapter exposing proactive session resolver."""
+
+    chitchat_enabled: bool = True
+
+    def resolve_proactive_session_key(self, *, chat_id: str, chitchat_mode: bool) -> str | None:
+        if not chitchat_mode:
+            return f"feishu:{chat_id}"
+        if not self.chitchat_enabled:
+            return None
+        return f"feishu:{chat_id}__chitchat"
+
+
 async def _wait_for(predicate, timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -196,3 +210,98 @@ async def test_gateway_runtime_ignores_invalid_proactive_config(tmp_path: Path) 
     await runtime.stop()
 
     assert adapter.sent == []
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_routes_feishu_chitchat_task_to_dedicated_session(tmp_path: Path) -> None:
+    workspace = tmp_path / "gw-proactive-chitchat"
+    WorkspaceManager(workspace).init_workspace(name="gw-proactive-chitchat")
+
+    _write_proactive(
+        workspace / "PROACTIVE.md",
+        """{
+  "version": 1,
+  "enabled": true,
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": "chitchat-ping",
+      "kind": "once",
+      "at": "2026-03-01T08:00:00+00:00",
+      "session_key": "cli:legacy-memory",
+      "target": {
+        "channel": "feishu",
+        "chat_id": "chat-target"
+      },
+      "chitchat_mode": true,
+      "prompt": "Send a casual proactive ping."
+    }
+  ]
+}""",
+    )
+
+    runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
+    adapter = FakeFeishuSessionAdapter("feishu", chitchat_enabled=True)
+    runtime.register_adapter(adapter)
+
+    await runtime.start()
+    await _wait_for(lambda: len(adapter.sent) > 0)
+    await runtime.stop()
+
+    assert adapter.sent[0].chat_id == "chat-target"
+    assert adapter.sent[0].metadata["chitchat_mode"] is True
+
+    chitchat_session = SessionManager(workspace, workspace.name).get_or_create(
+        "feishu:chat-target__chitchat"
+    )
+    assert len(chitchat_session.messages) > 0
+
+    legacy_session = SessionManager(workspace, workspace.name).get_or_create("cli:legacy-memory")
+    assert len(legacy_session.messages) == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_suppresses_feishu_chitchat_task_when_disabled(tmp_path: Path) -> None:
+    workspace = tmp_path / "gw-proactive-chitchat-off"
+    WorkspaceManager(workspace).init_workspace(name="gw-proactive-chitchat-off")
+
+    _write_proactive(
+        workspace / "PROACTIVE.md",
+        """{
+  "version": 1,
+  "enabled": true,
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": "chitchat-ping",
+      "kind": "once",
+      "at": "2026-03-01T08:00:00+00:00",
+      "session_key": "cli:legacy-memory",
+      "target": {
+        "channel": "feishu",
+        "chat_id": "chat-target"
+      },
+      "chitchat_mode": true,
+      "prompt": "Send a casual proactive ping."
+    }
+  ]
+}""",
+    )
+
+    runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
+    adapter = FakeFeishuSessionAdapter("feishu", chitchat_enabled=False)
+    runtime.register_adapter(adapter)
+
+    await runtime.start()
+    await asyncio.sleep(0.25)
+    await runtime.stop()
+
+    assert adapter.sent == []
+
+    state = load_runtime_state(workspace)
+    assert state.tasks["chitchat-ping"].completed_at is not None
+
+    chitchat_session = SessionManager(workspace, workspace.name).get_or_create(
+        "feishu:chat-target__chitchat"
+    )
+    assert len(chitchat_session.messages) == 0

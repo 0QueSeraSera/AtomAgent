@@ -708,8 +708,20 @@ class AgentLoop:
         )
 
         # Slash commands
-        cmd = msg.content.strip().lower()
+        command_line = msg.content.strip()
+        tokens = command_line.split()
+        cmd = tokens[0].lower() if tokens else ""
+
         if cmd == "/new":
+            if msg.channel == "feishu" and metadata.get("feishu_new_session"):
+                session_id = metadata.get("feishu_session_id", "unknown")
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"Started new session: {session_id}",
+                    metadata=msg.metadata or {},
+                )
+
             lock = self._consolidation_locks.setdefault(session.key, asyncio.Lock())
             self._consolidating.add(session.key)
             try:
@@ -739,7 +751,123 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content="New session started."
             )
+
+        if cmd == "/sessions":
+            all_sessions = self.sessions.list_sessions()
+            channel_sessions = [
+                item
+                for item in all_sessions
+                if isinstance(item.get("key"), str) and item["key"].startswith(f"{msg.channel}:")
+            ]
+
+            active_key = key
+            if msg.channel == "feishu":
+                chat_id = metadata.get("feishu_chat_id", msg.chat_id)
+                active_key = str(metadata.get("feishu_active_session_key", key))
+                channel_sessions = [
+                    item
+                    for item in channel_sessions
+                    if item["key"] == f"feishu:{chat_id}"
+                    or item["key"].startswith(f"feishu:{chat_id}__")
+                    or item["key"] == f"feishu:chitchat:{chat_id}"
+                ]
+
+            if not channel_sessions:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="No sessions found.",
+                    metadata=msg.metadata or {},
+                )
+
+            lines = ["Sessions:"]
+            for item in channel_sessions:
+                session_key_text = item.get("key", "")
+                if not isinstance(session_key_text, str):
+                    continue
+                marker = "*" if session_key_text == active_key else " "
+                updated = item.get("updated_at", "unknown")
+                lines.append(f"{marker} {session_key_text} ({updated})")
+            lines.append("* = active session")
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="\n".join(lines),
+                metadata=msg.metadata or {},
+            )
+
+        if cmd == "/resume":
+            if msg.channel == "feishu":
+                if metadata.get("feishu_resume_ok"):
+                    session_id = metadata.get("feishu_session_id", "unknown")
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"Resumed session: {session_id}",
+                        metadata=msg.metadata or {},
+                    )
+                error_text = metadata.get("feishu_resume_error")
+                if isinstance(error_text, str) and error_text:
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=error_text,
+                        metadata=msg.metadata or {},
+                    )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Usage: /resume <session-id|session-key>",
+                metadata=msg.metadata or {},
+            )
+
+        if cmd == "/chitchat_on":
+            if metadata.get("chitchat_turned_on"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Proactive chitchat is now ON.",
+                    metadata=msg.metadata or {},
+                )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Chitchat mode enabled.",
+                metadata=msg.metadata or {},
+            )
+
+        if cmd in {"/chitchat_off", "/next_time"}:
+            if metadata.get("chitchat_ended"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Proactive chitchat is now OFF.",
+                    metadata=msg.metadata or {},
+                )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Chitchat mode is already OFF.",
+                metadata=msg.metadata or {},
+            )
+
         if cmd == "/help":
+            if msg.channel == "feishu":
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        f"🤖 {self.agent_name} commands:\n"
+                        "/new — Start a new session\n"
+                        "/sessions — List sessions\n"
+                        "/resume <id|key> — Resume session\n"
+                        "/chitchat_on — Enable proactive chitchat session\n"
+                        "/chitchat_off — Disable proactive chitchat session\n"
+                        "/workspace — Show workspace info\n"
+                        "/help — Show this help"
+                    ),
+                    metadata=msg.metadata or {},
+                )
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -759,23 +887,6 @@ class AgentLoop:
                     f"MCP: {len(info['mcp']['tools'])} tools from {len(info['mcp']['servers'])} server(s)"
                 ),
             )
-        if cmd == "/next_time":
-            # Handle chitchat session end
-            metadata = msg.metadata if isinstance(msg.metadata, dict) else {}
-            chitchat_ended = metadata.get("chitchat_ended", False)
-            if chitchat_ended:
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="Got it! Let's chat again next time. Feel free to reach out whenever you need help. 😊",
-                )
-            # Not in a chitchat session, just acknowledge
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Sure, I'll be here when you need me!",
-            )
-
         # Background memory consolidation
         unconsolidated = len(session.messages) - session.last_consolidated
         if unconsolidated >= self.memory_window and session.key not in self._consolidating:

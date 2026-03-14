@@ -171,6 +171,20 @@ class FeishuAdapter(ChannelAdapter):
 
     async def send(self, message: OutboundMessage) -> None:
         """Send text message to Feishu chat."""
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        # Chitchat proactive pushes are user-controlled via /chitchat_on/off.
+        if (
+            metadata.get("proactive")
+            and metadata.get("chitchat_mode")
+            and self._session_router is not None
+            and not self._session_router.is_in_chitchat(message.chat_id)
+        ):
+            logger.info(
+                "Suppressing Feishu chitchat proactive message while chitchat is off",
+                extra={"chat_id": message.chat_id, "task_id": metadata.get("task_id")},
+            )
+            return
+
         client = await self._ensure_client()
         token = await self._get_tenant_access_token()
         payload = {
@@ -283,9 +297,6 @@ class FeishuAdapter(ChannelAdapter):
         """
         Route inbound message through session router if available.
 
-        Checks for /next_time command to end chitchat sessions.
-        Routes to appropriate session (chitchat vs normal) based on current state.
-
         Args:
             chat_id: The Feishu chat ID
             content: The message content
@@ -295,30 +306,49 @@ class FeishuAdapter(ChannelAdapter):
             Tuple of (session_key, modified_metadata)
         """
         metadata = dict(base_metadata)
-
-        # Check for /next_time command to end chitchat
-        if content.strip().lower() == "/next_time":
-            if self._session_router is not None:
-                ended = self._session_router.end_chitchat(chat_id)
-                if ended:
-                    metadata["chitchat_ended"] = True
-                    logger.info(
-                        "Chitchat ended via /next_time command",
-                        extra={"chat_id": chat_id},
-                    )
-            # Route to normal session
-            return f"feishu:{chat_id}", metadata
+        metadata["feishu_chat_id"] = chat_id
 
         # Route through session router if available
         if self._session_router is not None:
+            self._session_router.cleanup_expired()
+            command_result = self._session_router.handle_command(chat_id, content)
+            if command_result is not None:
+                metadata.update(command_result.metadata)
+                return command_result.session_key, metadata
+
             session_key = self._session_router.get_session_key(chat_id)
             if self._session_router.is_in_chitchat(chat_id):
                 metadata["chitchat_active"] = True
+                metadata["feishu_chitchat_session_key"] = self._session_router.get_chitchat_session_key(
+                    chat_id
+                )
                 self._session_router.record_chitchat_message(chat_id)
+            metadata["feishu_active_session_key"] = self._session_router.get_active_normal_session_key(
+                chat_id
+            )
             return session_key, metadata
 
         # Default routing without session router
         return f"feishu:{chat_id}", metadata
+
+    def resolve_proactive_session_key(
+        self,
+        *,
+        chat_id: str,
+        chitchat_mode: bool,
+    ) -> str | None:
+        """
+        Resolve Feishu proactive memory session key for one outbound target.
+
+        Returns None when chitchat-mode proactive delivery is disabled by user command.
+        """
+        if self._session_router is None:
+            return f"feishu:{chat_id}"
+        if chitchat_mode:
+            if not self._session_router.is_in_chitchat(chat_id):
+                return None
+            return self._session_router.get_chitchat_session_key(chat_id)
+        return self._session_router.get_active_normal_session_key(chat_id)
 
     async def _publish_inbound(self, inbound: InboundMessage, *, source: str) -> None:
         if self._on_inbound is not None:

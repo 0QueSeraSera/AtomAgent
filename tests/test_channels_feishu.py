@@ -13,6 +13,7 @@ import pytest
 import atom_agent.channels.feishu as feishu_module
 from atom_agent.bus.events import InboundMessage, OutboundMessage
 from atom_agent.channels import FeishuAdapter, FeishuConfig, FeishuConfigError
+from atom_agent.channels.feishu_session import make_chitchat_session_key
 
 
 @dataclass
@@ -206,3 +207,89 @@ async def test_feishu_send_fetches_token_and_reuses_cache() -> None:
     assert fake_client.send_calls == 2
     assert fake_client.last_send_payload is not None
     assert fake_client.last_send_payload["receive_id"] == "oc_chat_3"
+
+
+@pytest.mark.asyncio
+async def test_feishu_router_commands_switch_sessions(tmp_path) -> None:
+    received: list[InboundMessage] = []
+    fake_client = FakeAsyncClient()
+    adapter = FeishuAdapter(_config(), client=fake_client)
+
+    from atom_agent.channels.feishu_session import FeishuSessionRouter
+
+    router = FeishuSessionRouter(workspace=tmp_path)
+    adapter.set_session_router(router)
+    await adapter.start(received.append)
+
+    chat_id = "oc_chat_router"
+
+    async def _emit(content: str, event_id: str, message_id: str) -> None:
+        payload = {
+            "header": {"event_id": event_id, "token": "verify-123"},
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_user_router"}},
+                "message": {
+                    "message_id": message_id,
+                    "chat_id": chat_id,
+                    "chat_type": "p2p",
+                    "message_type": "text",
+                    "content": json.dumps({"text": content}),
+                },
+            },
+        }
+        result = await adapter.handle_webhook_event(payload)
+        assert result["status"] == "ok"
+
+    await _emit("/new", "evt-r1", "om-r1")
+    assert received[-1].metadata["feishu_new_session"] is True
+    new_key = received[-1].session_key_override
+    assert new_key.startswith(f"feishu:{chat_id}__")
+
+    await _emit("hello", "evt-r2", "om-r2")
+    assert received[-1].session_key_override == new_key
+
+    await _emit("/chitchat_on", "evt-r3", "om-r3")
+    assert received[-1].metadata["chitchat_turned_on"] is True
+
+    await _emit("hi proactive", "evt-r4", "om-r4")
+    assert received[-1].session_key_override == make_chitchat_session_key(chat_id)
+
+    await _emit("/chitchat_off", "evt-r5", "om-r5")
+    assert received[-1].metadata["chitchat_turned_off"] is True
+
+    await _emit("back normal", "evt-r6", "om-r6")
+    assert received[-1].session_key_override == new_key
+
+
+@pytest.mark.asyncio
+async def test_feishu_chitchat_proactive_send_is_suppressed_when_disabled(tmp_path) -> None:
+    fake_client = FakeAsyncClient()
+    adapter = FeishuAdapter(_config(), client=fake_client)
+
+    from atom_agent.channels.feishu_session import FeishuSessionRouter
+
+    router = FeishuSessionRouter(workspace=tmp_path)
+    adapter.set_session_router(router)
+    await adapter.start(lambda _: None)
+
+    # chitchat off by default -> suppressed
+    await adapter.send(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_chat_suppress",
+            content="proactive ping",
+            metadata={"proactive": True, "chitchat_mode": True, "task_id": "t1"},
+        )
+    )
+    assert fake_client.send_calls == 0
+
+    router.start_chitchat("oc_chat_suppress")
+    await adapter.send(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_chat_suppress",
+            content="proactive ping",
+            metadata={"proactive": True, "chitchat_mode": True, "task_id": "t1"},
+        )
+    )
+    assert fake_client.send_calls == 1
