@@ -260,6 +260,12 @@ async def test_feishu_router_commands_switch_sessions(tmp_path) -> None:
     await _emit("back normal", "evt-r6", "om-r6")
     assert received[-1].session_key_override == new_key
 
+    await _emit("/proactive_chitchat_on", "evt-r7", "om-r7")
+    assert received[-1].metadata["proactive_chitchat_enabled"] is True
+
+    await _emit("/proactive_chitchat_off", "evt-r8", "om-r8")
+    assert received[-1].metadata["proactive_chitchat_enabled"] is False
+
 
 @pytest.mark.asyncio
 async def test_feishu_chitchat_proactive_send_is_suppressed_when_disabled(tmp_path) -> None:
@@ -272,7 +278,7 @@ async def test_feishu_chitchat_proactive_send_is_suppressed_when_disabled(tmp_pa
     adapter.set_session_router(router)
     await adapter.start(lambda _: None)
 
-    # chitchat off by default -> suppressed
+    # proactive chitchat off by default -> suppressed
     await adapter.send(
         OutboundMessage(
             channel="feishu",
@@ -283,7 +289,7 @@ async def test_feishu_chitchat_proactive_send_is_suppressed_when_disabled(tmp_pa
     )
     assert fake_client.send_calls == 0
 
-    router.start_chitchat("oc_chat_suppress")
+    router.handle_command("oc_chat_suppress", "/proactive_chitchat_on")
     await adapter.send(
         OutboundMessage(
             channel="feishu",

@@ -51,6 +51,7 @@ class FeishuChatSessionState:
     active_normal_session_id: str = DEFAULT_SESSION_ID
     known_normal_session_ids: list[str] = field(default_factory=lambda: [DEFAULT_SESSION_ID])
     chitchat_enabled: bool = False
+    proactive_chitchat_enabled: bool = False
     chitchat_started_at: str | None = None
     chitchat_last_message_at: str | None = None
     chitchat_message_count: int = 0
@@ -77,6 +78,7 @@ class FeishuChatSessionState:
             "active_normal_session_id": self.active_normal_session_id,
             "known_normal_session_ids": list(self.known_normal_session_ids),
             "chitchat_enabled": self.chitchat_enabled,
+            "proactive_chitchat_enabled": self.proactive_chitchat_enabled,
             "chitchat_started_at": self.chitchat_started_at,
             "chitchat_last_message_at": self.chitchat_last_message_at,
             "chitchat_message_count": self.chitchat_message_count,
@@ -91,6 +93,7 @@ class FeishuChatSessionState:
             or DEFAULT_SESSION_ID,
             known_normal_session_ids=list(raw.get("known_normal_session_ids", [DEFAULT_SESSION_ID])),
             chitchat_enabled=bool(raw.get("chitchat_enabled", False)),
+            proactive_chitchat_enabled=bool(raw.get("proactive_chitchat_enabled", False)),
             chitchat_started_at=raw.get("chitchat_started_at"),
             chitchat_last_message_at=raw.get("chitchat_last_message_at"),
             chitchat_message_count=int(raw.get("chitchat_message_count", 0) or 0),
@@ -318,6 +321,27 @@ class FeishuSessionRouter:
         self._mark_chitchat_activity(state)
         self._save_state()
 
+    def is_proactive_chitchat_enabled(self, chat_id: str) -> bool:
+        """Return whether proactive chitchat delivery is enabled for one chat."""
+        return self._ensure_state(chat_id).proactive_chitchat_enabled
+
+    def set_proactive_chitchat_enabled(self, chat_id: str, enabled: bool) -> bool:
+        """
+        Enable or disable proactive chitchat delivery for one chat.
+
+        Returns True when state changed.
+        """
+        state = self._ensure_state(chat_id)
+        if state.proactive_chitchat_enabled == enabled:
+            return False
+        state.proactive_chitchat_enabled = enabled
+        self._save_state()
+        logger.info(
+            "Feishu proactive chitchat setting changed",
+            extra={"chat_id": chat_id, "enabled": enabled},
+        )
+        return True
+
     def get_chitchat_info(self, chat_id: str) -> ChitchatSessionInfo | None:
         state = self._ensure_state(chat_id)
         if not self.is_in_chitchat(chat_id):
@@ -431,6 +455,30 @@ class FeishuSessionRouter:
                     "chitchat_active": True,
                     "chitchat_turned_on": True,
                     "feishu_chitchat_session_key": make_chitchat_session_key(chat_id),
+                },
+            )
+
+        if cmd == "/proactive_chitchat_on":
+            changed = self.set_proactive_chitchat_enabled(chat_id, True)
+            return FeishuCommandResult(
+                command=cmd,
+                session_key=self.get_active_normal_session_key(chat_id),
+                metadata={
+                    **base_meta,
+                    "proactive_chitchat_enabled": True,
+                    "proactive_chitchat_turned_on": changed,
+                },
+            )
+
+        if cmd == "/proactive_chitchat_off":
+            changed = self.set_proactive_chitchat_enabled(chat_id, False)
+            return FeishuCommandResult(
+                command=cmd,
+                session_key=self.get_active_normal_session_key(chat_id),
+                metadata={
+                    **base_meta,
+                    "proactive_chitchat_enabled": False,
+                    "proactive_chitchat_turned_off": changed,
                 },
             )
 

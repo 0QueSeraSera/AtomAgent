@@ -172,15 +172,15 @@ class FeishuAdapter(ChannelAdapter):
     async def send(self, message: OutboundMessage) -> None:
         """Send text message to Feishu chat."""
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        # Chitchat proactive pushes are user-controlled via /chitchat_on/off.
+        # Chitchat proactive pushes are user-controlled via /proactive_chitchat_on/off.
         if (
             metadata.get("proactive")
             and metadata.get("chitchat_mode")
             and self._session_router is not None
-            and not self._session_router.is_in_chitchat(message.chat_id)
+            and not self._session_router.is_proactive_chitchat_enabled(message.chat_id)
         ):
             logger.info(
-                "Suppressing Feishu chitchat proactive message while chitchat is off",
+                "Suppressing Feishu chitchat proactive message while proactive chitchat is off",
                 extra={"chat_id": message.chat_id, "task_id": metadata.get("task_id")},
             )
             return
@@ -345,7 +345,7 @@ class FeishuAdapter(ChannelAdapter):
         if self._session_router is None:
             return f"feishu:{chat_id}"
         if chitchat_mode:
-            if not self._session_router.is_in_chitchat(chat_id):
+            if not self._session_router.is_proactive_chitchat_enabled(chat_id):
                 return None
             return self._session_router.get_chitchat_session_key(chat_id)
         return self._session_router.get_active_normal_session_key(chat_id)

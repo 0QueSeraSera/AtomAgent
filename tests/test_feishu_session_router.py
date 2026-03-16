@@ -63,6 +63,31 @@ def test_router_chitchat_commands_switch_routing_and_alias(tmp_path: Path) -> No
     assert router.get_session_key(chat_id) == make_normal_session_key(chat_id)
 
 
+def test_router_proactive_chitchat_commands_toggle_delivery_switch(tmp_path: Path) -> None:
+    router = FeishuSessionRouter(workspace=tmp_path)
+    chat_id = "oc_chat_2_proactive"
+
+    assert router.is_proactive_chitchat_enabled(chat_id) is False
+
+    on_result = router.handle_command(chat_id, "/proactive_chitchat_on")
+    assert on_result is not None
+    assert on_result.metadata["proactive_chitchat_enabled"] is True
+    assert on_result.metadata["proactive_chitchat_turned_on"] is True
+    assert router.is_proactive_chitchat_enabled(chat_id) is True
+
+    # Idempotent ON command should keep enabled state and report no change.
+    on_again = router.handle_command(chat_id, "/proactive_chitchat_on")
+    assert on_again is not None
+    assert on_again.metadata["proactive_chitchat_enabled"] is True
+    assert on_again.metadata["proactive_chitchat_turned_on"] is False
+
+    off_result = router.handle_command(chat_id, "/proactive_chitchat_off")
+    assert off_result is not None
+    assert off_result.metadata["proactive_chitchat_enabled"] is False
+    assert off_result.metadata["proactive_chitchat_turned_off"] is True
+    assert router.is_proactive_chitchat_enabled(chat_id) is False
+
+
 def test_router_resume_rejects_unknown_session(tmp_path: Path) -> None:
     router = FeishuSessionRouter(workspace=tmp_path)
     result = router.handle_command("oc_chat_3", "/resume missing")

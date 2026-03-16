@@ -69,12 +69,12 @@ class FakeAdapter(ChannelAdapter):
 class FakeFeishuSessionAdapter(FakeAdapter):
     """Feishu-like adapter exposing proactive session resolver."""
 
-    chitchat_enabled: bool = True
+    proactive_chitchat_enabled: bool = True
 
     def resolve_proactive_session_key(self, *, chat_id: str, chitchat_mode: bool) -> str | None:
         if not chitchat_mode:
             return f"feishu:{chat_id}"
-        if not self.chitchat_enabled:
+        if not self.proactive_chitchat_enabled:
             return None
         return f"feishu:{chat_id}__chitchat"
 
@@ -241,7 +241,7 @@ async def test_gateway_runtime_routes_feishu_chitchat_task_to_dedicated_session(
     )
 
     runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
-    adapter = FakeFeishuSessionAdapter("feishu", chitchat_enabled=True)
+    adapter = FakeFeishuSessionAdapter("feishu", proactive_chitchat_enabled=True)
     runtime.register_adapter(adapter)
 
     await runtime.start()
@@ -289,7 +289,7 @@ async def test_gateway_runtime_suppresses_feishu_chitchat_task_when_disabled(tmp
     )
 
     runtime = GatewayRuntime(provider=DummyProvider(), workspace=workspace, proactive_poll_sec=0.05)
-    adapter = FakeFeishuSessionAdapter("feishu", chitchat_enabled=False)
+    adapter = FakeFeishuSessionAdapter("feishu", proactive_chitchat_enabled=False)
     runtime.register_adapter(adapter)
 
     await runtime.start()

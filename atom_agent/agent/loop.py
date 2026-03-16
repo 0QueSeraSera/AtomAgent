@@ -826,7 +826,7 @@ class AgentLoop:
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Proactive chitchat is now ON.",
+                    content="Chitchat session routing is now ON.",
                     metadata=msg.metadata or {},
                 )
             return OutboundMessage(
@@ -841,13 +841,43 @@ class AgentLoop:
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Proactive chitchat is now OFF.",
+                    content="Chitchat session routing is now OFF.",
                     metadata=msg.metadata or {},
                 )
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content="Chitchat mode is already OFF.",
+                metadata=msg.metadata or {},
+            )
+
+        if cmd == "/proactive_chitchat_on":
+            if metadata.get("proactive_chitchat_turned_on"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Agent-initiated proactive chitchat is now ON.",
+                    metadata=msg.metadata or {},
+                )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Agent-initiated proactive chitchat is already ON.",
+                metadata=msg.metadata or {},
+            )
+
+        if cmd == "/proactive_chitchat_off":
+            if metadata.get("proactive_chitchat_turned_off"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Agent-initiated proactive chitchat is now OFF.",
+                    metadata=msg.metadata or {},
+                )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Agent-initiated proactive chitchat is already OFF.",
                 metadata=msg.metadata or {},
             )
 
@@ -861,8 +891,10 @@ class AgentLoop:
                         "/new — Start a new session\n"
                         "/sessions — List sessions\n"
                         "/resume <id|key> — Resume session\n"
-                        "/chitchat_on — Enable proactive chitchat session\n"
-                        "/chitchat_off — Disable proactive chitchat session\n"
+                        "/chitchat_on — Route chat replies into chitchat session\n"
+                        "/chitchat_off — Route chat replies back to normal session\n"
+                        "/proactive_chitchat_on — Allow agent to start chitchat proactively\n"
+                        "/proactive_chitchat_off — Prevent agent proactive chitchat starts\n"
                         "/workspace — Show workspace info\n"
                         "/help — Show this help"
                     ),
