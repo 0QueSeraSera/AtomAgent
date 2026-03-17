@@ -1,221 +1,158 @@
-# Coding Agent Guidelines for AtomAgent
+# AGENTS.md - Coding Agents (Codex, Cursor, Claude Code, etc.) Instructions for AtomAgent
 
-This document provides guidance for AI coding agents (Codex, Claude Code, etc.) working on the AtomAgent project.
+This file contains project-specific instructions for AI coding agents when working on AtomAgent.
 
-## Core Principles
+## Project Overview
 
-### 1. User Experience First
+AtomAgent is a Python framework for building **proactive, long-running AI agents**. Unlike traditional chatbots that only respond to user messages, AtomAgent agents can:
 
-- **Verify features work in real interfaces**, not just in tests. A CLI chat, API endpoint, or UI interaction must actually work as expected.
-- **Run the actual application** to confirm changes take effect. Do not rely solely on unit tests or syntax checks.
-- **Test end-to-end flows** when modifying core agent behavior (message processing, tool execution, memory consolidation).
+- **Initiate conversations** autonomously (proactive messaging)
+- **Schedule tasks** to run at specific times or intervals
+- **Maintain persistent memory** across sessions
+- **Integrate with multiple channels** (CLI, Feishu/Lark)
 
-### 2. Real Runtime Verification
+See `AGENTS.md` for general coding agent guidelines and `README.md` for user-facing documentation.
 
-- **Use real LLM responses** when verifying agent behavior. No stubs, no mocks for integration testing.
-- **Refer to actual runtime logs** to verify the project's LLM behaves as expected.
-- **Check real outputs** from the agent loop, tool executions, and memory operations.
-- When in doubt, run `examples/basic_agent.py` or create a minimal reproduction script.
+## Core Features
 
-### 3. Context Management via `agent_docs/`
+### Proactive Agent System
+Agents can send messages without waiting for user input via:
+- **ProactiveTask**: Time-based or event-based scheduled tasks
+- **ProactiveScheduler**: Manages task execution and state
+- **Chitchat**: Auto-generated casual messages for engagement
 
-The `agent_docs/` directory is the source of truth for coding context:
+### Multi-Channel Support
+- **CLI**: Interactive terminal-based chat
+- **Feishu/Lark**: Enterprise messaging with WebSocket long-connection or webhook modes
+- **Session routing**: Per-user/per-thread session isolation
 
-```
-agent_docs/
-├── plan.md        # Current implementation plan and architecture decisions
-├── progress.md    # Active work items, in-progress tasks, blockers
-├── archive/       # Completed tasks and deprecated plans
-└── notes/         # Technical notes, patterns, and gotchas
-```
+### Memory System
+Two-layer memory architecture:
+- **MEMORY.md**: Long-term facts about the user and context
+- **HISTORY.md**: Searchable conversation log with consolidation
 
-**Agents should:**
-- Read `agent_docs/plan.md` before starting work to understand current direction
-- Update `agent_docs/progress.md` with task status and findings
-- Move completed items to `agent_docs/archive/` with timestamps
-- Document non-obvious patterns in `agent_docs/notes/`
+## Development Commands
 
-## Project Architecture
-
-AtomAgent is a Python framework for building proactive, long-running AI agents.
-
-```
-atom_agent/
-├── agent/         # Core agent loop and context building
-│   ├── loop.py    # Main AgentLoop class - message processing engine
-│   └── context.py # ContextBuilder - system prompts and message assembly
-├── bus/           # Message bus for channel communication
-│   ├── events.py  # InboundMessage, OutboundMessage, ProactiveTask
-│   └── queue.py   # MessageBus (priority queue) and ProactiveScheduler
-├── memory/        # Long-term memory system
-│   └── store.py   # MemoryStore - MEMORY.md and HISTORY.md management
-├── provider/      # LLM provider interface
-│   └── base.py    # Abstract LLMProvider class and data types
-├── session/       # Session management
-│   └── manager.py # Session and SessionManager classes
-└── tools/         # Tool system
-    ├── base.py    # Abstract Tool class
-    ├── registry.py# ToolRegistry - registration and execution
-    └── message.py # MessageTool for proactive messaging
-```
-
-## Git Worktree Development Pattern
-
-Agents MUST use git worktrees for isolated development when working on features or bug fixes.
-This ensures the main repository remains stable and allows parallel development.
-
-### Worktree Naming Convention
-
-```
-atomAgent-worktree-{type}-{description}
-```
-
-- **type**: `fix`, `feat`, `perf`, `refactor`, `docs`, `test`, `chore`
-- **description**: short kebab-case description of the work
-
-Examples:
-- `atomAgent-worktree-fix-login-timeout`
-- `atomAgent-worktree-feat-openai-provider`
-- `atomAgent-worktree-perf-context-building`
-
-### Branch Naming Convention
-
-Branches follow the same prefix pattern:
-
-```
-{type}/{description}
-```
-
-Examples:
-- `fix/login-timeout`
-- `feat/openai-provider`
-- `perf/context-building`
-
-### Worktree Rules
-
-**CRITICAL: Agents working within a git worktree are NOT allowed to:**
-- Manipulate the main repository (`main` branch)
-- Push to or modify other agents' branches
-- Create or delete branches in the main repo
-- Merge branches or perform operations affecting the main repo
-
-**Agents CAN:**
-- Commit to their own worktree's branch
-- Push their own branch to remote
-- Create commits and update their worktree's branch
-
-### Creating a Worktree
+**IMPORTANT: Always use a virtual environment. Never install to system Python.**
 
 ```bash
-# Create a worktree with a new branch
-git worktree add ../atomAgent-worktree-feat-my-feature -b feat/my-feature
-
-# Or from an existing branch
-git worktree add ../atomAgent-worktree-fix-bug -b fix/bug-name origin/main
-```
-
-### Worktree Workflow
-
-1. **Create worktree** for your task with appropriate naming
-2. **Do your work** in the worktree directory
-3. **Commit and push** only to your branch
-4. **Create PR** when ready for review
-5. **Clean up** worktree after merge:
-   ```bash
-   git worktree remove ../atomAgent-worktree-feat-my-feature
-   ```
-
-### Listing and Managing Worktrees
-
-```bash
-# List all worktrees
-git worktree list
-
-# Remove a worktree (after work is complete)
-git worktree remove <path>
-
-# Prune stale worktree references
-git worktree prune
-```
-
-## Development Workflow
-
-### Before Making Changes
-
-1. Read `agent_docs/plan.md` and `agent_docs/progress.md`
-2. Understand the existing code by reading relevant source files
-3. Identify affected components and their dependencies
-4. **Create a git worktree** for isolated development
-
-### After Making Changes
-
-1. **Run the actual code** - verify with real LLM calls, not just pytest
-2. Update `agent_docs/progress.md` with what was done
-3. Archive completed work to `agent_docs/archive/`
-
-### Testing Philosophy
-
-- Unit tests are for isolated component behavior
-- Integration tests should use real LLM responses when feasible
-- Always verify CLI/chat interface works after changes
-
-## Key Patterns
-
-### Agent Loop Flow
-
-```
-InboundMessage → Context Build → LLM Call → Tool Execution → OutboundMessage
-                     ↑                                    ↓
-              Session History ←─────────────────────── Save Turn
-```
-
-### Memory Consolidation
-
-When conversation history exceeds `memory_window`, background consolidation:
-1. Extracts important facts → `MEMORY.md`
-2. Archives conversation → `HISTORY.md`
-3. Clears session history
-
-### Tool Registration
-
-Tools extend the `Tool` base class and are registered via `agent.register_tool()`.
-
-## Python Environment Setup
-
-**CRITICAL: Always use a virtual environment. NEVER install packages to system Python.**
-
-```bash
-# Create virtual environment
+# Create and activate virtual environment
 python3 -m venv .venv
+source .venv/bin/activate  # macOS/Linux
 
-# Activate virtual environment
-source .venv/bin/activate  # Linux/macOS
-# or
-.venv\Scripts\activate     # Windows
-
-# Install dependencies
+# Install development dependencies
 pip install -e ".[dev]"
-```
 
-Before running any commands, ensure your virtual environment is active. You should see `(.venv)` in your terminal prompt.
-
-## Commands
-
-```bash
 # Run tests
-pytest tests/
+pytest tests/ -v
 
-# Run example (requires implementing a real provider)
+# Run specific test file
+pytest tests/test_agent_loop.py -v
+
+# Run linting
+ruff check atom_agent/
+ruff format atom_agent/
+
+# Run the basic example (requires a real provider implementation)
 python examples/basic_agent.py
 
-# Lint
-ruff check atom_agent/
+# Run gateway mode with Feishu
+atom-agent gateway run --workspace ./workspace
 ```
 
-## Important Notes
+## Coding Standards
 
-- **Virtual environment is mandatory** - never install to system Python
-- Python 3.11+ required
-- Uses asyncio throughout
-- No external LLM SDK dependencies (providers implement their own)
-- Session keys format: `{channel}:{chat_id}`
+- **Line length**: 100 characters max
+- **Python version**: 3.11+
+- **Style**: Follow ruff rules (E, F, I, W)
+- **Async**: All I/O operations should be async
+- **Type hints**: Use type annotations for function signatures
+- **Docstrings**: Use for public APIs, not for trivial functions
+
+## Architecture Principles
+
+### Async-First Design
+All I/O operations are async. The agent runs in an async event loop and channels, providers, and tools should use async/await.
+
+### Channel Isolation
+Each channel (CLI, Feishu) has its own adapter but shares the core AgentLoop. Session keys uniquely identify conversations (e.g., `feishu:user_123`).
+
+### Tool System
+Tools are self-contained units with:
+- JSON schema for parameters
+- Async execute method
+- Automatic registration via ToolRegistry
+
+### Provider Abstraction
+LLM providers implement a common interface (`LLMProvider`), making it easy to swap models (DeepSeek, OpenAI, Anthropic, etc.).
+
+## Key Files to Understand
+
+| Area | Key Files | Purpose |
+|------|-----------|---------|
+| Core Loop | `agent/loop.py` | Main agent processing engine |
+| Context | `agent/context.py` | Builds system prompts and messages for LLM |
+| Message Bus | `bus/queue.py` | Priority queue for incoming messages |
+| Proactive | `proactive/runtime.py`, `proactive/scheduler.py` | Task scheduling and execution |
+| Channels | `channels/feishu.py`, `channels/manager.py` | External channel integrations |
+| Memory | `memory/store.py` | Long-term memory management |
+| CLI | `cli/__main__.py` | Entry point for all CLI commands |
+
+## When Making Changes
+
+1. **Read AGENTS.md first** - it contains essential principles about user experience verification
+2. **Check `agent_docs/progress.md`** - see what's in progress
+4. **Verify with real execution** - don't rely solely on tests
+
+## Context Files
+
+The `agent_docs/` directory contains coding context that persists across sessions:
+
+- `plan.md` - Current implementation plans
+- `progress.md` - Active work tracking
+- `archived/` - Completed work
+- `notes/` - Technical patterns and gotchas
+
+Update these files as you work to maintain continuity.
+
+## Testing Guidelines
+
+- Write unit tests for isolated component behavior
+- For integration testing, prefer real LLM responses over mocks
+- Always verify changes work in actual CLI/chat interface
+- Test files follow pattern: `test_{module}_{feature}.py`
+- E2E tests are prefixed with `e2e_`
+
+## Common Tasks
+
+### Adding a New Tool
+
+1. Extend `Tool` class from `atom_agent/tools/base.py`
+2. Implement `name`, `description`, `parameters`, and `execute()`
+3. Register with `agent.register_tool(MyTool())`
+
+### Adding a New Provider
+
+1. Extend `LLMProvider` from `atom_agent/provider/base.py`
+2. Implement `get_default_model()` and `chat()`
+3. Return `LLMResponse` objects
+
+### Modifying Agent Behavior
+
+The main loop is in `atom_agent/agent/loop.py`. Key methods:
+- `run()` - Main event loop
+- `_process_message()` - Handle single message
+- `_run_agent_loop()` - Iteration loop with tool calls
+
+## Environment Variables
+
+Key configuration via environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `DEEPSEEK_API_KEY` | DeepSeek LLM API key |
+| `FEISHU_APP_ID` | Feishu app ID |
+| `FEISHU_APP_SECRET` | Feishu app secret |
+| `ATOM_AGENT_WORKSPACE` | Default workspace directory |
+
+See `.env.example` for full list.
